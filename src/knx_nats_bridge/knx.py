@@ -8,11 +8,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from xknx import XKNX
-from xknx.dpt import DPTBase, DPTBinary
+from xknx.dpt import DPTArray, DPTBase, DPTBinary
 from xknx.io import ConnectionConfig, ConnectionType
 from xknx.telegram import Telegram
 from xknx.telegram.address import GroupAddress
-from xknx.telegram.apci import GroupValueRead, GroupValueResponse, GroupValueWrite
+from xknx.telegram.apci import GroupValueResponse, GroupValueWrite
 
 from .config import ConnectionType as CfgConnectionType
 from .config import Settings, UnmappedPolicy
@@ -47,9 +47,11 @@ class KnxListener:
         if x is None:
             return False
         try:
-            return bool(x.knxip_interface is not None and getattr(x, "started", False))
+            state = x.connection_manager.state
+            name = getattr(state, "name", str(state)).upper()
         except Exception:
             return False
+        return "CONNECTED" in name
 
     async def start(self) -> None:
         cfg = self._build_connection_config()
@@ -98,18 +100,17 @@ class KnxListener:
         logger.info("knx tunnel state: %s", name)
 
     async def _on_telegram(self, telegram: Telegram) -> None:
-        # We only care about GroupValue Write/Response on group addresses.
+        # Only GroupValue Write/Response carry an updated value worth publishing.
+        # Read requests (GroupValueRead) and other APCI types are skipped silently.
         apci = telegram.payload
         if not isinstance(apci, (GroupValueWrite, GroupValueResponse)):
-            if isinstance(apci, GroupValueRead):
-                return
             return
 
         dest = telegram.destination_address
         if not isinstance(dest, GroupAddress):
             return
 
-        ga_str = dest.__str__()  # "a/b/c" for GroupAddress with 3-level style
+        ga_str = str(dest)  # "a/b/c" for 3-level GroupAddress style
         parts = ga_str.split("/")
         if len(parts) != 3:
             return
@@ -144,7 +145,7 @@ class KnxListener:
             "name": entry.name,
             "dpt": entry.dpt,
             "value": dpt_value,
-            "ts": _now_rfc3339_nanos(),
+            "ts": _now_rfc3339_micros(),
         }
         await self._publisher.publish_event(subject, payload)
 
@@ -152,17 +153,17 @@ class KnxListener:
 def _decode(raw_value: Any, dpt: str) -> Any:
     """Decode a KNX payload value using xknx's DPT transcoders.
 
-    raw_value is typically DPTBinary (1-bit) or DPTArray (multi-byte).
+    raw_value is typically DPTBinary (1-bit up to 6-bit) or DPTArray (multi-byte).
+    If the DPT is unknown (e.g. RAW policy for unmapped GAs), return a raw
+    representation: int for DPTBinary, list[int] for DPTArray.
     """
-    # 1-bit DPTs arrive as DPTBinary; decode to bool for clean JSON semantics.
-    if isinstance(raw_value, DPTBinary):
-        if dpt.startswith("1."):
-            return bool(raw_value.value)
-        return int(raw_value.value)
-
     transcoder = DPTBase.parse_transcoder(dpt)
     if transcoder is None:
-        raise ValueError(f"unknown DPT: {dpt}")
+        if isinstance(raw_value, DPTBinary):
+            return int(raw_value.value)
+        if isinstance(raw_value, DPTArray):
+            return list(raw_value.value)
+        return None
     value = transcoder.from_knx(raw_value)
     return _jsonable(value)
 
@@ -180,9 +181,7 @@ def _jsonable(value: Any) -> Any:
     return str(value)
 
 
-def _now_rfc3339_nanos() -> str:
-    # datetime only gives microseconds; pad to 9 digits for nanosecond precision.
-    now = datetime.now(UTC)
-    base = now.strftime("%Y-%m-%dT%H:%M:%S")
-    micros = now.microsecond
-    return f"{base}.{micros:06d}000Z"
+def _now_rfc3339_micros() -> str:
+    # Python datetime gives microsecond precision; RFC3339 allows arbitrary
+    # fractional digit count. Downstream can widen to nanoseconds if needed.
+    return datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
