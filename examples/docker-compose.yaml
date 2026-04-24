@@ -1,0 +1,49 @@
+# Minimal docker-compose example for the KNX-NATS bridge.
+#
+# Secrets are mounted as files using docker-compose secrets (not env vars).
+# The bridge reads them from the paths configured via *_FILE env vars.
+
+services:
+  nats:
+    image: nats:2.10-alpine
+    command: [ "-js" ]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+
+  bridge:
+    image: ghcr.io/alexander-zimmermann/knx-nats-bridge:latest
+    depends_on:
+      - nats
+    environment:
+      KNX_CONNECTION_TYPE: tunneling_tcp
+      KNX_GATEWAY_HOST: 192.0.2.10
+      KNX_GATEWAY_PORT: "3671"
+      NATS_SERVERS: nats://nats:4222
+      NATS_SUBJECT_PREFIX: knx
+      KNX_NATS_MAPPING_PATH: /etc/knx-nats-bridge/ga-mapping.yaml
+      KNX_NATS_UNMAPPED_POLICY: skip
+      LOG_FORMAT: json
+      METRICS_PORT: "9090"
+      # Point the bridge at the mounted secret file.
+      # docker-compose mounts secrets at /run/secrets/<name>.
+      NATS_CREDS_FILE: /run/secrets/nats_creds
+      # Alternative (user/password auth):
+      # NATS_USER: knx-bridge
+      # NATS_USER_PASSWORD_FILE: /run/secrets/nats_password
+    volumes:
+      - ./ga-mapping.yaml:/etc/knx-nats-bridge/ga-mapping.yaml:ro
+    secrets:
+      - nats_creds
+      # - nats_password
+      # - knx_secure_keyring
+    ports:
+      - "9090:9090"
+
+secrets:
+  nats_creds:
+    file: ./nats.creds
+  # nats_password:
+  #   file: ./nats-password
+  # knx_secure_keyring:
+  #   file: ./knx-secure.knxkeys

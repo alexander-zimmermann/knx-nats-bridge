@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/alexander-zimmermann/knx-nats-bridge/schemas/event.schema.json",
+  "title": "KNX event on NATS",
+  "description": "One decoded KNX telegram published to a NATS subject.",
+  "type": "object",
+  "properties": {
+    "ga":    { "type": "string", "pattern": "^[0-9]+/[0-9]+/[0-9]+$" },
+    "name":  { "type": "string", "minLength": 1 },
+    "dpt":   { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+    "value": { "type": ["boolean", "number", "integer", "string", "null"] },
+    "ts":    { "type": "string", "format": "date-time" }
+  },
+  "required": ["ga", "name", "dpt", "value", "ts"],
+  "additionalProperties": true
+}
