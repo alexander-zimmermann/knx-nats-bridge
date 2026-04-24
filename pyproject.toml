@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Bridge KNX telegrams to NATS JetStream with DPT decoding"
 readme = "README.md"
 license = "GPL-2.0-or-later"
-requires-python = ">=3.14.4"
+requires-python = ">=3.14"
 authors = [
     { name = "Alexander Zimmermann" },
 ]
@@ -12,7 +12,7 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "License :: OSI Approved :: GNU General Public License v2 or later (GPLv2+)",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Home Automation",
 ]
 dependencies = [
@@ -53,13 +53,13 @@ packages = ["src/knx_nats_bridge"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "RET", "SIM", "ARG"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.14"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
