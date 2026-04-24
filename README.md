@@ -103,13 +103,14 @@ knxproj-to-yaml --input project.knxproj --output ga-mapping.yaml
 Flat JSON, one object per telegram. Native DPT types preserved.
 
 ```json
-{"ga":"1/2/3","name":"Hallway light","dpt":"1.001","value":true,"ts":"2026-04-22T12:34:56.789123456Z"}
+{"ga":"1/2/3","name":"Hallway light","dpt":"1.001","value":true,"ts":"2026-04-22T12:34:56.789123Z"}
 {"ga":"2/1/5","name":"Living room temperature","dpt":"9.001","value":21.5,"ts":"..."}
 {"ga":"3/2/7","name":"Heat pump energy counter","dpt":"13.013","value":123456,"ts":"..."}
 ```
 
-Timestamp is RFC3339 with nanosecond precision (KNX can deliver multiple
-telegrams per second; downstream can truncate).
+Timestamp is RFC3339 UTC with microsecond precision (Python `datetime` upper
+bound). KNX can deliver several telegrams per second; microsecond resolution
+keeps a `(time, ga)` primary key collision-free downstream.
 
 Payloads are validated against
 [src/knx_nats_bridge/_schemas/event.schema.json](src/knx_nats_bridge/_schemas/event.schema.json)
