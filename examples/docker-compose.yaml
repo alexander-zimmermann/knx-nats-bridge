@@ -28,13 +28,15 @@ services:
       # Point the bridge at the mounted secret file.
       # docker-compose mounts secrets at /run/secrets/<name>.
       NATS_CREDS_FILE: /run/secrets/nats_creds
-      # Alternative (user/password auth):
+      # Alternatives (pick one):
+      # NATS_NKEY_SEED_FILE: /run/secrets/nats_nkey_seed
       # NATS_USER: knx-bridge
       # NATS_USER_PASSWORD_FILE: /run/secrets/nats_password
     volumes:
       - ./ga-mapping.yaml:/etc/knx-nats-bridge/ga-mapping.yaml:ro
     secrets:
       - nats_creds
+      # - nats_nkey_seed
       # - nats_password
       # - knx_secure_keyring
     ports:
@@ -43,6 +45,8 @@ services:
 secrets:
   nats_creds:
     file: ./nats.creds
+  # nats_nkey_seed:
+  #   file: ./nats.nkey
   # nats_password:
   #   file: ./nats-password
   # knx_secure_keyring:
