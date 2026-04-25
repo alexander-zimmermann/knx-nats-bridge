@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     nats_servers: str = "nats://localhost:4222"
     nats_subject_prefix: str = "knx"
     nats_creds_file: Path | None = None
+    nats_nkey_seed_file: Path | None = None
     nats_user: str | None = None
     nats_user_password_file: Path | None = None
     nats_stream_check: bool = True

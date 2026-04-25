@@ -46,3 +46,13 @@ def test_servers_list_splits_commas(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NATS_SERVERS", "nats://a:4222, nats://b:4222")
     s = Settings()
     assert s.nats_servers_list == ["nats://a:4222", "nats://b:4222"]
+
+
+def test_nkey_seed_file_accepted(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setenv("KNX_GATEWAY_HOST", "192.0.2.10")
+    seed_file = tmp_path / "nkey-seed"
+    seed_file.write_text("SUADFK6A2CUJXTARGJWGSSJNG7OINWPY4TAYAAMZOEEJNYQLKVH6BYVYTU\n")
+    monkeypatch.setenv("NATS_NKEY_SEED_FILE", str(seed_file))
+    s = Settings()
+    assert s.nats_nkey_seed_file == seed_file
+    assert s.nats_nkey_seed_file.exists()

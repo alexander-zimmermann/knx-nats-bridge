@@ -60,9 +60,12 @@ Secrets are read from files, never from env vars.
 |---|---|---|
 | `NATS_SERVERS` | `nats://localhost:4222` | Comma-separated NATS URLs |
 | `NATS_SUBJECT_PREFIX` | `knx` | Subject prefix, `<prefix>.<a>.<b>.<c>` |
-| `NATS_CREDS_FILE` | `/etc/knx-nats-bridge/nats.creds` | NATS `.creds` file (preferred) |
+| `NATS_CREDS_FILE` | — | NATS `.creds` file (JWT bundle, full operator/account auth) |
+| `NATS_NKEY_SEED_FILE` | — | NKey seed file (`SU…`), for decentralized nkey auth |
 | `NATS_USER` | — | Username, for user/password auth |
 | `NATS_USER_PASSWORD_FILE` | — | Path to password file, for user/password auth |
+
+Auth precedence: `NATS_CREDS_FILE` > `NATS_NKEY_SEED_FILE` > `NATS_USER` + `NATS_USER_PASSWORD_FILE`. Configure exactly one form; the others can stay unset.
 
 ### Observability
 

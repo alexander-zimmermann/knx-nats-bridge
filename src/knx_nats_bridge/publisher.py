@@ -50,8 +50,12 @@ class Publisher:
             "error_cb": self._on_error,
         }
 
+        # Auth precedence: creds file > nkey seed file > user/password.
+        # Each form is mutually exclusive in nats-py; pick the first that's configured.
         if self._settings.nats_creds_file and self._settings.nats_creds_file.exists():
             kwargs["user_credentials"] = str(self._settings.nats_creds_file)
+        elif self._settings.nats_nkey_seed_file and self._settings.nats_nkey_seed_file.exists():
+            kwargs["nkeys_seed"] = str(self._settings.nats_nkey_seed_file)
         elif self._settings.nats_user:
             password = self._settings.read_nats_password()
             if password is None:
