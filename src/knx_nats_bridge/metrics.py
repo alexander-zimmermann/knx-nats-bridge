@@ -29,8 +29,18 @@ class Metrics:
 
         self.telegrams_received = Counter(
             "knx_telegrams_received_total",
-            "KNX telegrams received from the bus, by DPT",
+            "KNX GroupValue Write/Response telegrams seen on the bus",
+            registry=self.registry,
+        )
+        self.telegrams_decoded = Counter(
+            "knx_telegrams_decoded_total",
+            "Telegrams successfully decoded by DPT (subset of received)",
             ["dpt"],
+            registry=self.registry,
+        )
+        self.telegrams_unmapped = Counter(
+            "knx_telegrams_unmapped_total",
+            "Telegrams whose group address has no mapping entry",
             registry=self.registry,
         )
         self.telegrams_published = Counter(
