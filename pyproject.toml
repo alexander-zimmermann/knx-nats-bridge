@@ -1,6 +1,6 @@
 [project]
 name = "knx-nats-bridge"
-version = "0.1.1"
+version = "0.1.2"
 description = "Bridge KNX telegrams to NATS JetStream with DPT decoding"
 readme = "README.md"
 license = "GPL-2.0-or-later"
@@ -17,7 +17,7 @@ classifiers = [
 ]
 dependencies = [
     "xknx>=3.15.0",
-    "nats-py>=2.14.0",
+    "nats-py[nkeys]>=2.14.0",
     "prometheus-client>=0.25.0",
     "pydantic>=2.13.3",
     "pydantic-settings>=2.14.0",
