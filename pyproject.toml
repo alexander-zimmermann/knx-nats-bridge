@@ -1,6 +1,6 @@
 [project]
 name = "knx-nats-bridge"
-version = "0.1.3"
+version = "0.1.4"
 description = "Bridge KNX telegrams to NATS JetStream with DPT decoding"
 readme = "README.md"
 license = "GPL-2.0-or-later"

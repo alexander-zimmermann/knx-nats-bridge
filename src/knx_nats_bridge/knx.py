@@ -119,8 +119,15 @@ class KnxListener:
         if len(parts) != 3:
             return
 
+        # Count every valid GroupValue telegram and bump the freshness gauge,
+        # regardless of mapping coverage. Lets operators see bus activity in
+        # /metrics even before/without a ga-mapping.yaml.
+        self._metrics.telegrams_received.inc()
+        self._metrics.last_telegram_ts.set(time.time())
+
         entry = self._mapping.get(ga_str)
         if entry is None:
+            self._metrics.telegrams_unmapped.inc()
             policy = self._settings.knx_nats_unmapped_policy
             if policy == UnmappedPolicy.SKIP:
                 return
@@ -138,8 +145,7 @@ class KnxListener:
             logger.warning("DPT decode failed for %s dpt=%s: %s", ga_str, entry.dpt, exc)
             return
 
-        self._metrics.telegrams_received.labels(dpt=entry.dpt).inc()
-        self._metrics.last_telegram_ts.set(time.time())
+        self._metrics.telegrams_decoded.labels(dpt=entry.dpt).inc()
 
         prefix = self._settings.nats_subject_prefix
         subject = f"{prefix}.{parts[0]}.{parts[1]}.{parts[2]}"

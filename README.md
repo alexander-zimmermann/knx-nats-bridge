@@ -144,8 +144,10 @@ Retention and storage size depend on your consumer patterns.
 
 Exposed on `http://<pod>:${METRICS_PORT}/metrics`:
 
-- `knx_telegrams_received_total{dpt}` — counter
-- `knx_telegrams_published_total` — counter
+- `knx_telegrams_received_total` — counter, every GroupValue Write/Response telegram seen on the bus (regardless of mapping coverage)
+- `knx_telegrams_decoded_total{dpt}` — counter, telegrams successfully decoded by DPT (subset of received)
+- `knx_telegrams_unmapped_total` — counter, telegrams whose group address has no mapping entry
+- `knx_telegrams_published_total` — counter, payloads successfully ack'd by NATS JetStream
 - `knx_publish_errors_total{reason}` — counter, reasons: `timeout`, `schema`, `no_stream`, `nak`, `other`
 - `knx_tunnel_connected` — gauge 0/1
 - `nats_connected` — gauge 0/1
