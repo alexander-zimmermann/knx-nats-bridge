@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from datetime import UTC, datetime
@@ -36,6 +37,9 @@ class KnxListener:
         self._publisher = publisher
         self._metrics = metrics
         self._xknx: XKNX | None = None
+        # Hold strong references to in-flight publish tasks so they aren't
+        # garbage-collected mid-await (asyncio docs §asyncio.create_task).
+        self._publish_tasks: set[asyncio.Task[bool]] = set()
 
     @property
     def xknx(self) -> XKNX | None:
@@ -93,13 +97,13 @@ class KnxListener:
             local_ip=self._settings.knx_local_ip,
         )
 
-    async def _on_state(self, state: Any) -> None:
-        # xknx passes an enum-like state; "CONNECTED" maps to 1.
+    def _on_state(self, state: Any) -> None:
+        # xknx invokes connection-state callbacks synchronously.
         name = getattr(state, "name", str(state)).upper()
         self._metrics.tunnel_connected.set(1 if "CONNECTED" in name else 0)
         logger.info("knx tunnel state: %s", name)
 
-    async def _on_telegram(self, telegram: Telegram) -> None:
+    def _on_telegram(self, telegram: Telegram) -> None:
         # Only GroupValue Write/Response carry an updated value worth publishing.
         # Read requests (GroupValueRead) and other APCI types are skipped silently.
         apci = telegram.payload
@@ -147,7 +151,11 @@ class KnxListener:
             "value": dpt_value,
             "ts": _now_rfc3339_micros(),
         }
-        await self._publisher.publish_event(subject, payload)
+        # Sync callback context: schedule the async publish on the running loop.
+        # Errors are logged inside publish_event; we don't block the bus thread.
+        task = asyncio.create_task(self._publisher.publish_event(subject, payload))
+        self._publish_tasks.add(task)
+        task.add_done_callback(self._publish_tasks.discard)
 
 
 def _decode(raw_value: Any, dpt: str) -> Any:
