@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Protocol
 
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
@@ -16,11 +15,9 @@ from prometheus_client import (
     generate_latest,
 )
 
+from .logging_setup import TrackedStreamHandler
+
 logger = logging.getLogger(__name__)
-
-
-class HealthCheck(Protocol):
-    def __call__(self) -> bool: ...
 
 
 class Metrics:
@@ -68,6 +65,22 @@ class Metrics:
             "knx_last_telegram_received_timestamp",
             "Unix timestamp of the last received KNX telegram (seconds)",
             registry=self.registry,
+        )
+        # Surface logger-health state so a stuck stdout is visible in Prometheus,
+        # not just via liveness. Source of truth is TrackedStreamHandler.
+        self.log_emit_errors = Gauge(
+            "knx_bridge_log_emit_errors",
+            "Cumulative count of logging handler emit() failures since pod start",
+            registry=self.registry,
+        )
+        self.log_emit_errors.set_function(lambda: float(TrackedStreamHandler.emit_errors_total))
+        self.log_last_emit_ok_timestamp = Gauge(
+            "knx_bridge_log_last_emit_ok_timestamp",
+            "Monotonic-seconds timestamp of the last successful log emit",
+            registry=self.registry,
+        )
+        self.log_last_emit_ok_timestamp.set_function(
+            lambda: float(TrackedStreamHandler.last_emit_ok_ts)
         )
 
 
