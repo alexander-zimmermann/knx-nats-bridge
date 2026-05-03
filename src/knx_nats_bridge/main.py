@@ -7,9 +7,11 @@ import contextlib
 import logging
 import signal
 import sys
+import time
 
 from .config import Settings
 from .knx import KnxListener
+from .logging_setup import TrackedStreamHandler
 from .logging_setup import configure as configure_logging
 from .mapping import GroupAddressMapping
 from .metrics import Metrics
@@ -17,6 +19,18 @@ from .metrics import serve as serve_metrics
 from .publisher import Publisher
 
 logger = logging.getLogger(__name__)
+
+# Liveness fails after this many seconds of consecutive log-emit failures.
+# Forgiving enough for a transient stdout glitch (kubelet log rotation etc.),
+# tight enough that a real wedge causes a restart well within an hour.
+LOG_EMIT_RECOVERY_WINDOW_SECONDS = 60.0
+
+
+def logger_watchdog_ok(now: float) -> bool:
+    """Return False if log emits have been failing for longer than the recovery window."""
+    if TrackedStreamHandler.emit_errors_total <= 0:
+        return True
+    return (now - TrackedStreamHandler.last_emit_ok_ts) <= LOG_EMIT_RECOVERY_WINDOW_SECONDS
 
 
 async def _amain() -> int:
@@ -40,7 +54,9 @@ async def _amain() -> int:
     listener = KnxListener(settings, mapping, publisher, metrics)
 
     def is_healthy() -> bool:
-        return publisher.is_connected and listener.connected
+        if not (publisher.is_connected and listener.connected):
+            return False
+        return logger_watchdog_ok(time.monotonic())
 
     http_server = await serve_metrics(metrics, settings.metrics_port, is_healthy)
 
