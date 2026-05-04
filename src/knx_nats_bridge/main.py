@@ -38,15 +38,15 @@ async def _amain() -> int:
     configure_logging(settings.log_level, settings.log_format)
     logger.info("knx-nats-bridge starting")
     logger.info(
-        "config: connection=%s gateway=%s:%s subject_prefix=%s mapping=%s",
+        "config: connection=%s gateway=%s:%s subject_prefix=%s catalog=%s",
         settings.knx_connection_type.value,
         settings.knx_gateway_host,
         settings.knx_gateway_port,
         settings.nats_subject_prefix,
-        settings.knx_nats_mapping_path,
+        settings.knx_nats_catalog_path,
     )
 
-    mapping = GroupAddressMapping.load(settings.knx_nats_mapping_path)
+    mapping = GroupAddressMapping.load(settings.knx_nats_catalog_path)
     logger.info("loaded %d GA entries", len(mapping))
 
     metrics = Metrics()

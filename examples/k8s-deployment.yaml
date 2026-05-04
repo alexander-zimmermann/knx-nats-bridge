@@ -4,9 +4,9 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: knx-nats-bridge-mapping
+  name: knx-nats-bridge-catalog
 data:
-  ga-mapping.yaml: |
+  knx-catalog.yaml: |
     "1/0/1": { name: "Living room light", dpt: "1.001" }
     "2/0/1": { name: "Living room temperature", dpt: "9.001" }
 ---
@@ -50,8 +50,8 @@ spec:
               value: nats://nats.nats.svc.cluster.local:4222
             - name: NATS_SUBJECT_PREFIX
               value: knx
-            - name: KNX_NATS_MAPPING_PATH
-              value: /etc/knx-nats-bridge/ga-mapping.yaml
+            - name: KNX_NATS_CATALOG_PATH
+              value: /etc/knx-nats-bridge/knx-catalog.yaml
             - name: NATS_CREDS_FILE
               value: /etc/knx-nats-bridge/nats.creds
             - name: LOG_FORMAT
@@ -75,18 +75,18 @@ spec:
               cpu: 200m
               memory: 256Mi
           volumeMounts:
-            - name: mapping
-              mountPath: /etc/knx-nats-bridge/ga-mapping.yaml
-              subPath: ga-mapping.yaml
+            - name: catalog
+              mountPath: /etc/knx-nats-bridge/knx-catalog.yaml
+              subPath: knx-catalog.yaml
               readOnly: true
             - name: nats
               mountPath: /etc/knx-nats-bridge/nats.creds
               subPath: nats.creds
               readOnly: true
       volumes:
-        - name: mapping
+        - name: catalog
           configMap:
-            name: knx-nats-bridge-mapping
+            name: knx-nats-bridge-catalog
         - name: nats
           secret:
             secretName: knx-nats-bridge-nats
