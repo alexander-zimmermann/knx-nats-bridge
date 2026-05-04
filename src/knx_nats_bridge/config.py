@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     knx_individual_address: str | None = None
     knx_secure_keyring_file: Path | None = None
     knx_secure_keyring_password: str | None = None
-    knx_nats_mapping_path: Path = Path("/etc/knx-nats-bridge/ga-mapping.yaml")
+    knx_nats_catalog_path: Path = Path("/etc/knx-nats-bridge/knx-catalog.yaml")
     knx_nats_unmapped_policy: UnmappedPolicy = UnmappedPolicy.SKIP
 
     # NATS

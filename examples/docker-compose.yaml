@@ -21,7 +21,7 @@ services:
       KNX_GATEWAY_PORT: "3671"
       NATS_SERVERS: nats://nats:4222
       NATS_SUBJECT_PREFIX: knx
-      KNX_NATS_MAPPING_PATH: /etc/knx-nats-bridge/ga-mapping.yaml
+      KNX_NATS_CATALOG_PATH: /etc/knx-nats-bridge/knx-catalog.yaml
       KNX_NATS_UNMAPPED_POLICY: skip
       LOG_FORMAT: json
       METRICS_PORT: "9090"
@@ -33,7 +33,7 @@ services:
       # NATS_USER: knx-bridge
       # NATS_USER_PASSWORD_FILE: /run/secrets/nats_password
     volumes:
-      - ./ga-mapping.yaml:/etc/knx-nats-bridge/ga-mapping.yaml:ro
+      - ./knx-catalog.yaml:/etc/knx-nats-bridge/knx-catalog.yaml:ro
     secrets:
       - nats_creds
       # - nats_nkey_seed

@@ -6,8 +6,9 @@ Publish KNX telegrams to NATS JetStream with DPT decoding.
 
 Connects to a KNX/IP gateway (tunneling or routing), decodes each incoming
 telegram using the KNX Data-Point-Type (DPT) declared in a user-provided
-group-address mapping, and publishes the decoded value as JSON to a NATS
-JetStream subject (`<prefix>.<main>.<middle>.<sub>`).
+**KNX catalog** (group-address → name/DPT plus optional ETS metadata
+`room`/`function`/`description`), and publishes the decoded value as JSON to
+a NATS JetStream subject (`<prefix>.<main>.<middle>.<sub>`).
 
 Native types are preserved on the wire: DPT 1.x → `bool`, DPT 5.x/7.x/13.x →
 `int`, DPT 9.x/14.x → `float`. Consumers can cast as needed.
@@ -27,8 +28,8 @@ docker run --rm \
   -e KNX_GATEWAY_PORT=3671 \
   -e NATS_SERVERS=nats://nats:4222 \
   -e NATS_SUBJECT_PREFIX=knx \
-  -e KNX_NATS_MAPPING_PATH=/etc/knx-nats-bridge/ga-mapping.yaml \
-  -v $(pwd)/ga-mapping.yaml:/etc/knx-nats-bridge/ga-mapping.yaml:ro \
+  -e KNX_NATS_CATALOG_PATH=/etc/knx-nats-bridge/knx-catalog.yaml \
+  -v $(pwd)/knx-catalog.yaml:/etc/knx-nats-bridge/knx-catalog.yaml:ro \
   -v $(pwd)/nats.creds:/etc/knx-nats-bridge/nats.creds:ro \
   ghcr.io/alexander-zimmermann/knx-nats-bridge:latest
 ```
@@ -43,62 +44,77 @@ Secrets are read from files, never from env vars.
 
 ### KNX
 
-| Var | Default | Description |
-|---|---|---|
-| `KNX_CONNECTION_TYPE` | `tunneling_tcp` | `tunneling_tcp`, `tunneling_udp`, or `routing` |
-| `KNX_GATEWAY_HOST` | — | Gateway IP or hostname (not needed for `routing`) |
-| `KNX_GATEWAY_PORT` | `3671` | |
-| `KNX_LOCAL_IP` | — | Optional, for multicast routing |
-| `KNX_INDIVIDUAL_ADDRESS` | — | Optional, e.g. `1.1.250` |
-| `KNX_SECURE_KEYRING_FILE` | — | Optional, path to `.knxkeys` for KNX/IP Secure |
-| `KNX_NATS_MAPPING_PATH` | `/etc/knx-nats-bridge/ga-mapping.yaml` | GA mapping file |
-| `KNX_NATS_UNMAPPED_POLICY` | `skip` | `skip`, `warn`, or `raw` |
+| Var                        | Default                                 | Description                                       |
+| -------------------------- | --------------------------------------- | ------------------------------------------------- |
+| `KNX_CONNECTION_TYPE`      | `tunneling_tcp`                         | `tunneling_tcp`, `tunneling_udp`, or `routing`    |
+| `KNX_GATEWAY_HOST`         | —                                       | Gateway IP or hostname (not needed for `routing`) |
+| `KNX_GATEWAY_PORT`         | `3671`                                  |                                                   |
+| `KNX_LOCAL_IP`             | —                                       | Optional, for multicast routing                   |
+| `KNX_INDIVIDUAL_ADDRESS`   | —                                       | Optional, e.g. `1.1.250`                          |
+| `KNX_SECURE_KEYRING_FILE`  | —                                       | Optional, path to `.knxkeys` for KNX/IP Secure    |
+| `KNX_NATS_CATALOG_PATH`    | `/etc/knx-nats-bridge/knx-catalog.yaml` | KNX catalog file                                  |
+| `KNX_NATS_UNMAPPED_POLICY` | `skip`                                  | `skip`, `warn`, or `raw`                          |
 
 ### NATS
 
-| Var | Default | Description |
-|---|---|---|
-| `NATS_SERVERS` | `nats://localhost:4222` | Comma-separated NATS URLs |
-| `NATS_SUBJECT_PREFIX` | `knx` | Subject prefix, `<prefix>.<a>.<b>.<c>` |
-| `NATS_CREDS_FILE` | — | NATS `.creds` file (JWT bundle, full operator/account auth) |
-| `NATS_NKEY_SEED_FILE` | — | NKey seed file (`SU…`), for decentralized nkey auth |
-| `NATS_USER` | — | Username, for user/password auth |
-| `NATS_USER_PASSWORD_FILE` | — | Path to password file, for user/password auth |
+| Var                       | Default                 | Description                                                 |
+| ------------------------- | ----------------------- | ----------------------------------------------------------- |
+| `NATS_SERVERS`            | `nats://localhost:4222` | Comma-separated NATS URLs                                   |
+| `NATS_SUBJECT_PREFIX`     | `knx`                   | Subject prefix, `<prefix>.<a>.<b>.<c>`                      |
+| `NATS_CREDS_FILE`         | —                       | NATS `.creds` file (JWT bundle, full operator/account auth) |
+| `NATS_NKEY_SEED_FILE`     | —                       | NKey seed file (`SU…`), for decentralized nkey auth         |
+| `NATS_USER`               | —                       | Username, for user/password auth                            |
+| `NATS_USER_PASSWORD_FILE` | —                       | Path to password file, for user/password auth               |
 
 Auth precedence: `NATS_CREDS_FILE` > `NATS_NKEY_SEED_FILE` > `NATS_USER` + `NATS_USER_PASSWORD_FILE`. Configure exactly one form; the others can stay unset.
 
 ### Observability
 
-| Var | Default | Description |
-|---|---|---|
-| `METRICS_PORT` | `9090` | HTTP port for `/metrics` and `/healthz` |
-| `LOG_LEVEL` | `INFO` | |
-| `LOG_FORMAT` | `json` | `json` or `text` |
+| Var            | Default | Description                             |
+| -------------- | ------- | --------------------------------------- |
+| `METRICS_PORT` | `9090`  | HTTP port for `/metrics` and `/healthz` |
+| `LOG_LEVEL`    | `INFO`  |                                         |
+| `LOG_FORMAT`   | `json`  | `json` or `text`                        |
 
-## GA mapping format
+## KNX catalog format
 
-YAML file keyed by group address (`<main>/<middle>/<sub>`), each entry giving
-a human name and a DPT string (`<main>.<sub>`). Validated against
-[src/knx_nats_bridge/_schemas/ga-mapping.schema.json](src/knx_nats_bridge/_schemas/ga-mapping.schema.json) at startup.
+YAML file keyed by group address (`<main>/<middle>/<sub>`). Each entry has
+two required fields (`name`, `dpt`) and three optional ones extracted from
+ETS (`room`, `function`, `description`). Validated against
+[src/knx_nats_bridge/\_schemas/knx-catalog.schema.json](src/knx_nats_bridge/_schemas/knx-catalog.schema.json)
+at startup.
 
 ```yaml
-# examples/ga-mapping.example.yaml
+# examples/knx-catalog.example.yaml
 "1/2/3":
-  name: "Hallway light"
+  name: "Beleuchtung.OG.Schlafzimmer.Decke.Schalten"
   dpt: "1.001"
+  room: "Schlafzimmer"
+  function: "Beleuchtung"
+  description: "Deckenleuchte schalten"
 "2/1/5":
-  name: "Living room temperature"
+  name: "Sensorik.OG.Schlafzimmer.Temperatur"
   dpt: "9.001"
+  room: "Schlafzimmer"
+  function: "Sensorik"
 "3/2/7":
-  name: "Heat pump energy counter"
+  name: "Versorgungstechnik.KG.Heizung.Energiezähler"
   dpt: "13.013"
 ```
 
+The bridge itself only uses `name` and `dpt`; the optional fields are
+consumed by downstream services (iot-mcp-bridge for SQL joins by room,
+state-projector for Redis keying by function).
+
 Use `knxproj-to-yaml` (requires the `[tools]` extra: `pip install
-"knx-nats-bridge[tools]"`) to generate this from an ETS `.knxproj` export:
+"knx-nats-bridge[tools]"`) to generate the catalog from an ETS `.knxproj`
+export. It walks the ETS Building hierarchy for `room`, the ETS Functions
+table for `function`, and uses the GA's `description`/`comment` field
+verbatim:
 
 ```sh
-knxproj-to-yaml --input project.knxproj --output ga-mapping.yaml
+knxproj-to-yaml --input project.knxproj --output knx-catalog.yaml \
+                [--password 'ets-password']
 ```
 
 ## Payload format
@@ -116,7 +132,7 @@ bound). KNX can deliver several telegrams per second; microsecond resolution
 keeps a `(time, ga)` primary key collision-free downstream.
 
 Payloads are validated against
-[src/knx_nats_bridge/_schemas/event.schema.json](src/knx_nats_bridge/_schemas/event.schema.json)
+[src/knx_nats_bridge/\_schemas/event.schema.json](src/knx_nats_bridge/_schemas/event.schema.json)
 before publishing.
 
 ## JetStream expectations

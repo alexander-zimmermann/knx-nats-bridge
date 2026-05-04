@@ -121,7 +121,7 @@ class KnxListener:
 
         # Count every valid GroupValue telegram and bump the freshness gauge,
         # regardless of mapping coverage. Lets operators see bus activity in
-        # /metrics even before/without a ga-mapping.yaml.
+        # /metrics even before/without a knx-catalog.yaml.
         self._metrics.telegrams_received.inc()
         self._metrics.last_telegram_ts.set(time.time())
 

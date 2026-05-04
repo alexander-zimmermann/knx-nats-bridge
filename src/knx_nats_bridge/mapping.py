@@ -1,4 +1,4 @@
-"""GA mapping loader: YAML file -> validated {GA -> (name, DPT)} lookup table."""
+"""KNX-catalog loader: YAML file -> validated {GA -> entry} lookup table."""
 
 from __future__ import annotations
 
@@ -10,13 +10,16 @@ from typing import Any
 import jsonschema
 import yaml
 
-_SCHEMA_PATH = Path(__file__).resolve().parent / "_schemas" / "ga-mapping.schema.json"
+_SCHEMA_PATH = Path(__file__).resolve().parent / "_schemas" / "knx-catalog.schema.json"
 
 
 @dataclass(frozen=True, slots=True)
 class GAEntry:
     name: str
     dpt: str  # "<main>.<sub>", e.g. "9.001"
+    room: str | None = None
+    function: str | None = None
+    description: str | None = None
 
 
 class GroupAddressMapping:
@@ -54,6 +57,12 @@ class GroupAddressMapping:
             dpt = entry.get("dpt")
             if not isinstance(name, str) or not isinstance(dpt, str):
                 raise ValueError(f"{path}: entry for {ga!r} requires string 'name' and 'dpt'")
-            entries[ga] = GAEntry(name=name, dpt=dpt)
+            entries[ga] = GAEntry(
+                name=name,
+                dpt=dpt,
+                room=entry.get("room"),
+                function=entry.get("function"),
+                description=entry.get("description"),
+            )
 
         return cls(entries)
