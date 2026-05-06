@@ -64,6 +64,18 @@ strict = true
 warn_return_any = true
 warn_unused_configs = true
 
+[[tool.mypy.overrides]]
+# Neither xknx nor xknxproject ship complete stubs.
+module = ["xknx", "xknx.*", "xknxproject", "xknxproject.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# xknx / xknxproject have py.typed but incomplete `__all__` (attr-defined)
+# and `XKNXProj.parse()` returns a TypedDict (`KNXProject`) we treat as
+# `dict[str, Any]` at the boundary (return-value).
+module = ["knx_nats_bridge.knx", "knx_nats_bridge.tools.knxproj_to_yaml"]
+disable_error_code = ["attr-defined", "return-value"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
