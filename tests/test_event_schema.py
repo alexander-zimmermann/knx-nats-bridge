@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import jsonschema
 import pytest
@@ -17,7 +18,7 @@ SCHEMA = json.loads(
 )
 
 
-_VALID_PAYLOADS = [
+_VALID_PAYLOADS: list[dict[str, Any]] = [
     {
         "ga": "1/2/3",
         "name": "X",
@@ -41,20 +42,19 @@ _VALID_PAYLOADS = [
     },
 ]
 
+_INVALID_PAYLOADS: list[dict[str, Any]] = [
+    {"ga": "1.2.3", "name": "X", "dpt": "1.001", "value": True, "ts": "2026-04-22T12:34:56Z"},
+    {"ga": "1/2/3", "dpt": "1.001", "value": True, "ts": "2026-04-22T12:34:56Z"},
+    {"ga": "1/2/3", "name": "X", "dpt": "1-001", "value": True, "ts": "2026-04-22T12:34:56Z"},
+]
+
 
 @pytest.mark.parametrize("payload", _VALID_PAYLOADS)
-def test_valid_payload(payload: dict) -> None:
+def test_valid_payload(payload: dict[str, Any]) -> None:
     jsonschema.validate(instance=payload, schema=SCHEMA)
 
 
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {"ga": "1.2.3", "name": "X", "dpt": "1.001", "value": True, "ts": "2026-04-22T12:34:56Z"},
-        {"ga": "1/2/3", "dpt": "1.001", "value": True, "ts": "2026-04-22T12:34:56Z"},
-        {"ga": "1/2/3", "name": "X", "dpt": "1-001", "value": True, "ts": "2026-04-22T12:34:56Z"},
-    ],
-)
-def test_invalid_payload(payload: dict) -> None:
+@pytest.mark.parametrize("payload", _INVALID_PAYLOADS)
+def test_invalid_payload(payload: dict[str, Any]) -> None:
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(instance=payload, schema=SCHEMA)

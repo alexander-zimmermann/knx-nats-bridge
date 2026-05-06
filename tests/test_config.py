@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -48,11 +49,12 @@ def test_servers_list_splits_commas(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.nats_servers_list == ["nats://a:4222", "nats://b:4222"]
 
 
-def test_nkey_seed_file_accepted(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_nkey_seed_file_accepted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("KNX_GATEWAY_HOST", "192.0.2.10")
     seed_file = tmp_path / "nkey-seed"
     seed_file.write_text("SUADFK6A2CUJXTARGJWGSSJNG7OINWPY4TAYAAMZOEEJNYQLKVH6BYVYTU\n")
     monkeypatch.setenv("NATS_NKEY_SEED_FILE", str(seed_file))
     s = Settings()
     assert s.nats_nkey_seed_file == seed_file
+    assert s.nats_nkey_seed_file is not None
     assert s.nats_nkey_seed_file.exists()
