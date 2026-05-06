@@ -9,6 +9,7 @@
   "reportUnnecessaryIsInstance": "none",
   "reportUnnecessaryComparison": "none",
   "reportPrivateImportUsage": "none",
+  "reportReturnType": "none",
   "executionEnvironments": [
     {
       "root": "tests",
