@@ -47,17 +47,13 @@ def _extract(mapping: dict[str, Any], project_data: dict[str, Any]) -> None:
     itself defines. Project-specific enrichment (parsing rooms from naming
     conventions, normalising space names, etc.) is the consumer's job.
 
-    For each GA bound to at least one Communication Object we emit:
+    For each GA we emit:
       * ``name``         — verbatim from ETS
-      * ``dpt``          — ``<main>.<sub>`` formatted
+      * ``dpt``          — ``<main>.<sub>`` formatted; entries without a DPT
+                            are dropped
       * ``function``     — ETS Function name, if the GA is referenced by one
       * ``room``         — Function's space name, if the Function has a space_id
       * ``description``  — ETS description / comment, if non-empty
-
-    GAs that aren't bound to any Communication Object are dropped — these
-    are typically ETS Function-template slot defaults (auto-created when a
-    Function of a standard type is added) that carry the template's DPT and
-    persist as orphans even after the Function is deleted.
     """
     group_addresses = project_data.get("group_addresses", {}) or {}
     spaces = project_data.get("spaces") or project_data.get("locations") or {}
@@ -68,8 +64,6 @@ def _extract(mapping: dict[str, Any], project_data: dict[str, Any]) -> None:
 
     for ga_str, ga_info in group_addresses.items():
         if not isinstance(ga_info, dict):
-            continue
-        if not (ga_info.get("communication_object_ids") or []):
             continue
         name = ga_info.get("name") or ga_info.get("identifier") or ga_str
         dpt = _extract_dpt(ga_info.get("dpt"))

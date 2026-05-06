@@ -18,22 +18,19 @@ def _project_data() -> dict[str, Any]:
             "0/1/40": {
                 "name": "Lighting.1F.Bedroom.Ceiling.Switch",
                 "dpt": {"main": 1, "sub": 1},
-                "communication_object_ids": ["co-1"],
                 "description": "Switch ceiling light",
                 "comment": "",
             },
             "0/2/10": {
                 "name": "Sensors.1F.Bedroom.Temperature",
                 "dpt": {"main": 9, "sub": 1},
-                "communication_object_ids": ["co-2"],
                 "description": "",
                 "comment": "Bedroom temperature sensor",
             },
             "0/3/0": {
-                # No Function reference + has CO -> stays in output without room/function.
+                # No Function reference -> stays in output without room/function.
                 "name": "General.Central.Scenes",
                 "dpt": {"main": 17, "sub": 1},
-                "communication_object_ids": ["co-3"],
                 "description": "",
                 "comment": "",
             },
@@ -41,13 +38,6 @@ def _project_data() -> dict[str, Any]:
                 # Missing DPT — should be dropped.
                 "name": "Broken.Entry",
                 "dpt": None,
-                "communication_object_ids": ["co-4"],
-            },
-            "13/2/17": {
-                # Function-template orphan: no CO_ids -> dropped.
-                "name": "ActualTemperature",
-                "dpt": {"main": 9, "sub": 1},
-                "communication_object_ids": [],
             },
         },
         "spaces": {
@@ -127,14 +117,6 @@ def test_extract_drops_ga_without_dpt() -> None:
     mapping: dict[str, Any] = {}
     _extract(mapping, _project_data())
     assert "0/4/0" not in mapping
-
-
-def test_extract_drops_ga_without_communication_objects() -> None:
-    """ETS Function-template slot defaults (orphan GAs not bound to any CO)
-    must be filtered out — they carry the template's DPT, not the user's."""
-    mapping: dict[str, Any] = {}
-    _extract(mapping, _project_data())
-    assert "13/2/17" not in mapping
 
 
 def test_build_space_id_to_name_indexes_by_key_and_identifier() -> None:
