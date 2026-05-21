@@ -4,7 +4,7 @@ version = "0.3.1"
 description = "Bridge KNX telegrams to NATS JetStream with DPT decoding"
 readme = "README.md"
 license = "GPL-2.0-or-later"
-requires-python = ">=3.14.4"
+requires-python = ">=3.14.5"
 authors = [
     { name = "Alexander Zimmermann" },
 ]
@@ -20,7 +20,7 @@ dependencies = [
     "nats-py[nkeys]>=2.14.0",
     "prometheus-client>=0.25.0",
     "pydantic>=2.13.4",
-    "pydantic-settings>=2.14.0",
+    "pydantic-settings>=2.14.1",
     "pyyaml>=6.0.3",
     "jsonschema>=4.26.0",
 ]
@@ -33,8 +33,8 @@ dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.1.0",
-    "ruff>=0.15.12",
-    "mypy>=2.0.0",
+    "ruff>=0.15.14",
+    "mypy>=2.1.0",
     "pre-commit>=4.6.0",
     "types-PyYAML",
     "types-jsonschema",
