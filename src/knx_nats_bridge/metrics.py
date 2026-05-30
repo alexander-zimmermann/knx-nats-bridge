@@ -12,6 +12,7 @@ from prometheus_client import (
     CollectorRegistry,
     Counter,
     Gauge,
+    Histogram,
     generate_latest,
 )
 
@@ -81,6 +82,26 @@ class Metrics:
         )
         self.log_last_emit_ok_timestamp.set_function(
             lambda: float(TrackedStreamHandler.last_emit_ok_ts)
+        )
+
+        # Writer path (NATS -> KNX). Always registered so /metrics has a stable
+        # surface whether the writer is enabled or not.
+        self.knx_writes = Counter(
+            "knx_writes_total",
+            "KNX GroupValueWrite operations triggered by NATS events",
+            ["subject", "ga", "outcome"],
+            registry=self.registry,
+        )
+        self.knx_write_errors = Counter(
+            "knx_write_errors_total",
+            "Writer-side errors by reason (bad_json, payload_path, dpt_encode, bus)",
+            ["reason"],
+            registry=self.registry,
+        )
+        self.knx_write_duration = Histogram(
+            "knx_write_duration_seconds",
+            "End-to-end latency from NATS message receipt to bus put()",
+            registry=self.registry,
         )
 
 

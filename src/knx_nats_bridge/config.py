@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     nats_stream_check: bool = True
     nats_stream_name: str = "KNX"
 
+    # Bridge writer (NATS -> KNX). Off by default so the image releases without
+    # any cluster-side effect until the mapping is provisioned and the NATS
+    # user has been granted the necessary subscribe permissions.
+    bridge_write_enabled: bool = False
+    bridge_write_mapping_path: Path = Path("/etc/knx-nats-bridge/write-mapping.yaml")
+
     # Observability
     metrics_port: int = 9090
     log_level: str = "INFO"
@@ -78,6 +84,15 @@ class Settings(BaseSettings):
         tunneling = (ConnectionType.TUNNELING_TCP, ConnectionType.TUNNELING_UDP)
         if self.knx_connection_type in tunneling and not self.knx_gateway_host:
             raise ValueError("KNX_GATEWAY_HOST is required for tunneling modes")
+        return self
+
+    @model_validator(mode="after")
+    def _require_mapping_file_when_writer_enabled(self) -> Settings:
+        if self.bridge_write_enabled and not self.bridge_write_mapping_path.exists():
+            raise ValueError(
+                f"BRIDGE_WRITE_ENABLED is true but mapping file "
+                f"{self.bridge_write_mapping_path} does not exist"
+            )
         return self
 
     def read_nats_password(self) -> str | None:

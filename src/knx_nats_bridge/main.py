@@ -17,6 +17,8 @@ from .mapping import GroupAddressMapping
 from .metrics import Metrics
 from .metrics import serve as serve_metrics
 from .publisher import Publisher
+from .write_mapping import WriteMappingTable
+from .writer import Writer
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +55,24 @@ async def _amain() -> int:
     publisher = Publisher(settings, metrics)
     listener = KnxListener(settings, mapping, publisher, metrics)
 
+    write_mappings: WriteMappingTable | None = None
+    if settings.bridge_write_enabled:
+        write_mappings = WriteMappingTable.load(
+            settings.bridge_write_mapping_path,
+            reader_subject_prefix=settings.nats_subject_prefix,
+        )
+        logger.info(
+            "writer enabled: %d mappings across %d subjects",
+            len(write_mappings),
+            len(write_mappings.subjects()),
+        )
+
+    writer: Writer | None = None
+
     def is_healthy() -> bool:
         if not (publisher.is_connected and listener.connected):
+            return False
+        if writer is not None and len(writer._mappings) and not writer.is_connected:
             return False
         return logger_watchdog_ok(time.monotonic())
 
@@ -68,6 +86,12 @@ async def _amain() -> int:
     try:
         await publisher.connect()
         await listener.start()
+        if write_mappings is not None:
+            xknx_instance = listener.xknx
+            if xknx_instance is None:
+                raise RuntimeError("listener.xknx is None after start() — cannot start writer")
+            writer = Writer(settings, write_mappings, xknx_instance, metrics)
+            await writer.start()
         logger.info("bridge is up")
         await stop_event.wait()
     except Exception:
@@ -75,6 +99,11 @@ async def _amain() -> int:
         return 1
     finally:
         logger.info("shutting down")
+        if writer is not None:
+            try:
+                await writer.stop()
+            except Exception:
+                logger.exception("error stopping writer")
         try:
             await listener.stop()
         except Exception:

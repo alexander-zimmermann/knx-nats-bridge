@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/alexander-zimmermann/knx-nats-bridge/schemas/write-mapping.schema.json",
+  "title": "NATS-to-KNX write mapping",
+  "description": "Declares which NATS subject's events drive which KNX group-address writes.",
+  "type": "object",
+  "properties": {
+    "mappings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "subject":      { "type": "string", "minLength": 1 },
+          "ga":           { "type": "string", "pattern": "^[0-9]+/[0-9]+/[0-9]+$" },
+          "dpt":          { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+          "payload_path": { "type": "string", "pattern": "^\\$(\\.[A-Za-z_][A-Za-z0-9_]*)*$" },
+          "description":  { "type": "string" }
+        },
+        "required": ["subject", "ga", "dpt", "payload_path"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["mappings"],
+  "additionalProperties": false
+}
