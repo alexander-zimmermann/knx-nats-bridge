@@ -1,0 +1,116 @@
+"""Write-mapping loader: YAML file -> validated list of NATS-subject -> KNX-GA rules."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Iterator
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import jsonschema
+import yaml
+from xknx.dpt import DPTBase
+
+_SCHEMA_PATH = Path(__file__).resolve().parent / "_schemas" / "write-mapping.schema.json"
+
+
+@dataclass(frozen=True, slots=True)
+class WriteMapping:
+    subject: str
+    ga: str
+    dpt: str
+    payload_path: str
+    description: str | None = None
+
+
+class WriteMappingTable:
+    def __init__(self, mappings: list[WriteMapping]) -> None:
+        self._mappings = mappings
+        self._by_subject: dict[str, list[WriteMapping]] = {}
+        for m in mappings:
+            self._by_subject.setdefault(m.subject, []).append(m)
+
+    def __len__(self) -> int:
+        return len(self._mappings)
+
+    def __iter__(self) -> Iterator[WriteMapping]:
+        return iter(self._mappings)
+
+    def subjects(self) -> list[str]:
+        return list(self._by_subject.keys())
+
+    def for_subject(self, subject: str) -> list[WriteMapping]:
+        return self._by_subject.get(subject, [])
+
+    @classmethod
+    def load(
+        cls,
+        path: Path,
+        *,
+        reader_subject_prefix: str | None = None,
+        schema_path: Path | None = None,
+    ) -> WriteMappingTable:
+        raw_text = path.read_text(encoding="utf-8")
+        data: Any = yaml.safe_load(raw_text) or {}
+        if not isinstance(data, dict):
+            raise ValueError(
+                f"{path}: expected a mapping at the top level, got {type(data).__name__}"
+            )
+
+        schema_file = schema_path or _SCHEMA_PATH
+        if schema_file.exists():
+            schema = json.loads(schema_file.read_text(encoding="utf-8"))
+            jsonschema.validate(instance=data, schema=schema)
+
+        mappings: list[WriteMapping] = []
+        for raw in data.get("mappings", []):
+            dpt = raw["dpt"]
+            if DPTBase.parse_transcoder(dpt) is None:
+                raise ValueError(f"{path}: unknown DPT {dpt!r} in mapping for {raw['subject']!r}")
+
+            subject = raw["subject"]
+            # Loop-protection: a writer subscribed to the reader's own publish-prefix
+            # would re-trigger itself via the bus echo. Reject at load time.
+            if reader_subject_prefix and (
+                subject == reader_subject_prefix or subject.startswith(reader_subject_prefix + ".")
+            ):
+                raise ValueError(
+                    f"{path}: subject {subject!r} falls under reader prefix "
+                    f"{reader_subject_prefix!r} — would create a write/read loop"
+                )
+
+            mappings.append(
+                WriteMapping(
+                    subject=subject,
+                    ga=raw["ga"],
+                    dpt=dpt,
+                    payload_path=raw["payload_path"],
+                    description=raw.get("description"),
+                )
+            )
+
+        return cls(mappings)
+
+
+def extract_value(payload: Any, path: str) -> Any:
+    """Resolve a `$.field.subfield` path against a JSON-decoded payload.
+
+    `$` alone returns the root. Missing fields raise KeyError so callers can
+    decide whether to drop or warn — silently returning None would mask typos
+    in the mapping file.
+    """
+    if not path.startswith("$"):
+        raise ValueError(f"payload_path must start with '$', got {path!r}")
+    tail = path[1:]
+    if tail == "":
+        return payload
+    parts = tail.lstrip(".").split(".")
+    cur: Any = payload
+    for part in parts:
+        if not isinstance(cur, dict):
+            raise KeyError(f"cannot descend into {part!r}: parent is {type(cur).__name__}")
+        if part not in cur:
+            raise KeyError(part)
+        cur = cur[part]
+    return cur

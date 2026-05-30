@@ -1,0 +1,184 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import jsonschema
+import pytest
+
+from knx_nats_bridge.write_mapping import WriteMappingTable, extract_value
+
+
+def _write(tmp_path: Path, body: str) -> Path:
+    p = tmp_path / "write-mapping.yaml"
+    p.write_text(body, encoding="utf-8")
+    return p
+
+
+def test_loads_valid_mapping(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+        mappings:
+          - subject: "unifi.events.fassade.person"
+            ga: "14/3/1"
+            dpt: "1.005"
+            payload_path: "$.score"
+            description: "Person at fassade"
+          - subject: "ems-esp.boiler_data"
+            ga: "15/2/1"
+            dpt: "1.001"
+            payload_path: "$.burnstart_active"
+        """,
+    )
+    table = WriteMappingTable.load(path)
+    assert len(table) == 2
+    assert set(table.subjects()) == {"unifi.events.fassade.person", "ems-esp.boiler_data"}
+    [m] = table.for_subject("unifi.events.fassade.person")
+    assert m.ga == "14/3/1"
+    assert m.dpt == "1.005"
+    assert m.payload_path == "$.score"
+    assert m.description == "Person at fassade"
+
+
+def test_fan_out_multiple_mappings_per_subject(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+        mappings:
+          - subject: "ems-esp.boiler_data"
+            ga: "15/2/1"
+            dpt: "1.001"
+            payload_path: "$.burnstart_active"
+          - subject: "ems-esp.boiler_data"
+            ga: "15/2/2"
+            dpt: "9.001"
+            payload_path: "$.curflowtemp"
+        """,
+    )
+    table = WriteMappingTable.load(path)
+    assert len(table.for_subject("ems-esp.boiler_data")) == 2
+
+
+def test_rejects_invalid_ga_format(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+        mappings:
+          - subject: "x"
+            ga: "14.3.1"
+            dpt: "1.001"
+            payload_path: "$.foo"
+        """,
+    )
+    with pytest.raises(jsonschema.ValidationError):
+        WriteMappingTable.load(path)
+
+
+def test_rejects_invalid_dpt_format(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+        mappings:
+          - subject: "x"
+            ga: "1/2/3"
+            dpt: "binary"
+            payload_path: "$.foo"
+        """,
+    )
+    with pytest.raises(jsonschema.ValidationError):
+        WriteMappingTable.load(path)
+
+
+def test_rejects_unknown_dpt(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+        mappings:
+          - subject: "x"
+            ga: "1/2/3"
+            dpt: "999.999"
+            payload_path: "$.foo"
+        """,
+    )
+    with pytest.raises(ValueError, match="unknown DPT"):
+        WriteMappingTable.load(path)
+
+
+def test_rejects_invalid_payload_path(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+        mappings:
+          - subject: "x"
+            ga: "1/2/3"
+            dpt: "1.001"
+            payload_path: "score"
+        """,
+    )
+    with pytest.raises(jsonschema.ValidationError):
+        WriteMappingTable.load(path)
+
+
+def test_rejects_unknown_field(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+        mappings:
+          - subject: "x"
+            ga: "1/2/3"
+            dpt: "1.001"
+            payload_path: "$.foo"
+            transform: "negate"
+        """,
+    )
+    with pytest.raises(jsonschema.ValidationError):
+        WriteMappingTable.load(path)
+
+
+def test_rejects_loop_subject(tmp_path: Path) -> None:
+    # Subject under the reader prefix would echo back via the KNX bus.
+    path = _write(
+        tmp_path,
+        """
+        mappings:
+          - subject: "knx.14.3.1"
+            ga: "14/3/1"
+            dpt: "1.001"
+            payload_path: "$.value"
+        """,
+    )
+    with pytest.raises(ValueError, match="reader prefix"):
+        WriteMappingTable.load(path, reader_subject_prefix="knx")
+
+
+def test_allows_subject_without_reader_prefix_overlap(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+        mappings:
+          - subject: "anomaly.foo.warning"
+            ga: "15/0/1"
+            dpt: "1.001"
+            payload_path: "$.firing"
+        """,
+    )
+    table = WriteMappingTable.load(path, reader_subject_prefix="knx")
+    assert len(table) == 1
+
+
+def test_extract_value_root() -> None:
+    assert extract_value({"a": 1}, "$") == {"a": 1}
+
+
+def test_extract_value_nested() -> None:
+    assert extract_value({"a": {"b": {"c": 42}}}, "$.a.b.c") == 42
+
+
+def test_extract_value_missing_key_raises() -> None:
+    with pytest.raises(KeyError):
+        extract_value({"a": 1}, "$.b")
+
+
+def test_extract_value_descends_into_scalar_raises() -> None:
+    with pytest.raises(KeyError):
+        extract_value({"a": 1}, "$.a.b")
