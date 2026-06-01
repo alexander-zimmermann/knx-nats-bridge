@@ -1,4 +1,4 @@
-"""Convert an ETS .knxproj export into the knx-catalog.yaml format.
+"""Convert an ETS .knxproj export into the ga-catalog.yaml format.
 
 Extracts per group address: name, DPT, plus the ETS metadata that
 downstream consumers (iot-mcp-bridge, state-projector) need to
@@ -8,7 +8,7 @@ Requires the optional dependency `xknxproject` (install via
 `pip install "knx-nats-bridge[tools]"`).
 
 Example:
-    knxproj-to-yaml --input my-project.knxproj --output knx-catalog.yaml \\
+    knxproj-to-yaml --input my-project.knxproj --output ga-catalog.yaml \\
         [--password 'ets-password']
 """
 
@@ -152,10 +152,10 @@ def _build_ga_to_function(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Convert .knxproj to knx-catalog.yaml")
+    parser = argparse.ArgumentParser(description="Convert .knxproj to ga-catalog.yaml")
     parser.add_argument("--input", "-i", required=True, type=Path, help="Path to .knxproj file")
     parser.add_argument(
-        "--output", "-o", required=True, type=Path, help="Path to knx-catalog.yaml output"
+        "--output", "-o", required=True, type=Path, help="Path to ga-catalog.yaml output"
     )
     parser.add_argument("--password", default=None, help="ETS project password (if encrypted)")
     parser.add_argument("--verbose", "-v", action="store_true")

@@ -18,7 +18,7 @@ from xknx.telegram.apci import GroupValueWrite
 
 from .config import Settings
 from .metrics import Metrics
-from .write_mapping import WriteMapping, WriteMappingTable, extract_value
+from .writer_rules import WriterRule, WriterRules, extract_value
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +27,12 @@ class Writer:
     def __init__(
         self,
         settings: Settings,
-        mappings: WriteMappingTable,
+        rules: WriterRules,
         xknx: XKNX,
         metrics: Metrics,
     ) -> None:
         self._settings = settings
-        self._mappings = mappings
+        self._rules = rules
         self._xknx = xknx
         self._metrics = metrics
         self._nc: NatsClient | None = None
@@ -43,8 +43,8 @@ class Writer:
         return bool(self._nc and self._nc.is_connected)
 
     async def start(self) -> None:
-        if not len(self._mappings):
-            logger.info("writer enabled but mapping table is empty — idle")
+        if not len(self._rules):
+            logger.info("writer enabled but rules table is empty — idle")
             return
 
         self._nc = NatsClient()
@@ -57,13 +57,13 @@ class Writer:
         )
         await self._nc.connect(**kwargs)
         logger.info(
-            "writer connected to NATS: %s (%d subjects, %d mappings)",
+            "writer connected to NATS: %s (%d subjects, %d rules)",
             self._settings.nats_servers_list,
-            len(self._mappings.subjects()),
-            len(self._mappings),
+            len(self._rules.subjects()),
+            len(self._rules),
         )
 
-        for subject in self._mappings.subjects():
+        for subject in self._rules.subjects():
             sub = await self._nc.subscribe(subject, cb=self._on_message)
             self._subs.append(sub)
             logger.info("writer subscribed: %s", subject)
@@ -92,59 +92,57 @@ class Writer:
             return
 
         # One subject may fan out to several GAs (e.g. boiler_data mirrors
-        # both burner-status and DHW-state); process each mapping in order.
-        for mapping in self._mappings.for_subject(subject):
-            await self._apply(mapping, payload)
+        # both burner-status and DHW-state); process each rule in order.
+        for rule in self._rules.for_subject(subject):
+            await self._apply(rule, payload)
 
         self._metrics.knx_write_duration.observe(time.monotonic() - start)
 
-    async def _apply(self, mapping: WriteMapping, payload: dict[str, Any]) -> None:
+    async def _apply(self, rule: WriterRule, payload: dict[str, Any]) -> None:
         try:
-            raw_value = extract_value(payload, mapping.payload_path)
+            raw_value = extract_value(payload, rule.payload_path)
         except (KeyError, ValueError) as exc:
             self._metrics.knx_write_errors.labels(reason="payload_path").inc()
             logger.warning(
                 "writer: cannot extract %s from %s payload: %s",
-                mapping.payload_path,
-                mapping.subject,
+                rule.payload_path,
+                rule.subject,
                 exc,
             )
             return
 
         try:
-            dpt_payload = _encode_for_dpt(raw_value, mapping.dpt)
+            dpt_payload = _encode_for_dpt(raw_value, rule.dpt)
         except Exception as exc:
             self._metrics.knx_write_errors.labels(reason="dpt_encode").inc()
             logger.warning(
                 "writer: cannot encode value %r for DPT %s (subject=%s, ga=%s): %s",
                 raw_value,
-                mapping.dpt,
-                mapping.subject,
-                mapping.ga,
+                rule.dpt,
+                rule.subject,
+                rule.ga,
                 exc,
             )
             return
 
         telegram = Telegram(
-            destination_address=GroupAddress(mapping.ga),
+            destination_address=GroupAddress(rule.ga),
             payload=GroupValueWrite(dpt_payload),
         )
         try:
             await self._xknx.telegrams.put(telegram)
         except Exception:
-            self._metrics.knx_writes.labels(
-                subject=mapping.subject, ga=mapping.ga, outcome="error"
-            ).inc()
+            self._metrics.knx_writes.labels(subject=rule.subject, ga=rule.ga, outcome="error").inc()
             self._metrics.knx_write_errors.labels(reason="bus").inc()
-            logger.exception("writer: bus write failed for ga=%s", mapping.ga)
+            logger.exception("writer: bus write failed for ga=%s", rule.ga)
             return
 
-        self._metrics.knx_writes.labels(subject=mapping.subject, ga=mapping.ga, outcome="ok").inc()
+        self._metrics.knx_writes.labels(subject=rule.subject, ga=rule.ga, outcome="ok").inc()
         logger.debug(
             "writer: %s -> ga=%s dpt=%s value=%r",
-            mapping.subject,
-            mapping.ga,
-            mapping.dpt,
+            rule.subject,
+            rule.ga,
+            rule.dpt,
             raw_value,
         )
 

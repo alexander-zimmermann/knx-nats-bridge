@@ -5,11 +5,11 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from knx_nats_bridge.write_mapping import WriteMappingTable, extract_value
+from knx_nats_bridge.writer_rules import WriterRules, extract_value
 
 
 def _write(tmp_path: Path, body: str) -> Path:
-    p = tmp_path / "write-mapping.yaml"
+    p = tmp_path / "writer-rules.yaml"
     p.write_text(body, encoding="utf-8")
     return p
 
@@ -30,7 +30,7 @@ def test_loads_valid_mapping(tmp_path: Path) -> None:
             payload_path: "$.burnstart_active"
         """,
     )
-    table = WriteMappingTable.load(path)
+    table = WriterRules.load(path)
     assert len(table) == 2
     assert set(table.subjects()) == {"unifi.events.fassade.person", "ems-esp.boiler_data"}
     [m] = table.for_subject("unifi.events.fassade.person")
@@ -55,7 +55,7 @@ def test_fan_out_multiple_mappings_per_subject(tmp_path: Path) -> None:
             payload_path: "$.curflowtemp"
         """,
     )
-    table = WriteMappingTable.load(path)
+    table = WriterRules.load(path)
     assert len(table.for_subject("ems-esp.boiler_data")) == 2
 
 
@@ -71,7 +71,7 @@ def test_rejects_invalid_ga_format(tmp_path: Path) -> None:
         """,
     )
     with pytest.raises(jsonschema.ValidationError):
-        WriteMappingTable.load(path)
+        WriterRules.load(path)
 
 
 def test_rejects_invalid_dpt_format(tmp_path: Path) -> None:
@@ -86,7 +86,7 @@ def test_rejects_invalid_dpt_format(tmp_path: Path) -> None:
         """,
     )
     with pytest.raises(jsonschema.ValidationError):
-        WriteMappingTable.load(path)
+        WriterRules.load(path)
 
 
 def test_rejects_unknown_dpt(tmp_path: Path) -> None:
@@ -101,7 +101,7 @@ def test_rejects_unknown_dpt(tmp_path: Path) -> None:
         """,
     )
     with pytest.raises(ValueError, match="unknown DPT"):
-        WriteMappingTable.load(path)
+        WriterRules.load(path)
 
 
 def test_rejects_invalid_payload_path(tmp_path: Path) -> None:
@@ -116,7 +116,7 @@ def test_rejects_invalid_payload_path(tmp_path: Path) -> None:
         """,
     )
     with pytest.raises(jsonschema.ValidationError):
-        WriteMappingTable.load(path)
+        WriterRules.load(path)
 
 
 def test_rejects_unknown_field(tmp_path: Path) -> None:
@@ -132,7 +132,7 @@ def test_rejects_unknown_field(tmp_path: Path) -> None:
         """,
     )
     with pytest.raises(jsonschema.ValidationError):
-        WriteMappingTable.load(path)
+        WriterRules.load(path)
 
 
 def test_rejects_loop_subject(tmp_path: Path) -> None:
@@ -148,7 +148,7 @@ def test_rejects_loop_subject(tmp_path: Path) -> None:
         """,
     )
     with pytest.raises(ValueError, match="reader prefix"):
-        WriteMappingTable.load(path, reader_subject_prefix="knx")
+        WriterRules.load(path, reader_subject_prefix="knx")
 
 
 def test_allows_subject_without_reader_prefix_overlap(tmp_path: Path) -> None:
@@ -162,7 +162,7 @@ def test_allows_subject_without_reader_prefix_overlap(tmp_path: Path) -> None:
             payload_path: "$.firing"
         """,
     )
-    table = WriteMappingTable.load(path, reader_subject_prefix="knx")
+    table = WriterRules.load(path, reader_subject_prefix="knx")
     assert len(table) == 1
 
 

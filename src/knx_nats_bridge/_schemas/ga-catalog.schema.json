@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/alexander-zimmermann/knx-nats-bridge/schemas/knx-catalog.schema.json",
+  "$id": "https://github.com/alexander-zimmermann/knx-nats-bridge/schemas/ga-catalog.schema.json",
   "title": "KNX group-address catalog",
   "description": "Maps KNX group addresses to human names, DPTs, and ETS metadata (room, function, description).",
   "type": "object",

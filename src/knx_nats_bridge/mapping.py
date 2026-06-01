@@ -10,7 +10,7 @@ from typing import Any
 import jsonschema
 import yaml
 
-_SCHEMA_PATH = Path(__file__).resolve().parent / "_schemas" / "knx-catalog.schema.json"
+_SCHEMA_PATH = Path(__file__).resolve().parent / "_schemas" / "ga-catalog.schema.json"
 
 
 @dataclass(frozen=True, slots=True)

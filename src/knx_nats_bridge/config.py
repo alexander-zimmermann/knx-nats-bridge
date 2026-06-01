@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     knx_individual_address: str | None = None
     knx_secure_keyring_file: Path | None = None
     knx_secure_keyring_password: str | None = None
-    knx_nats_catalog_path: Path = Path("/etc/knx-nats-bridge/knx-catalog.yaml")
+    bridge_ga_catalog_path: Path = Path("/etc/knx-nats-bridge/ga-catalog.yaml")
     knx_nats_unmapped_policy: UnmappedPolicy = UnmappedPolicy.SKIP
 
     # NATS
@@ -58,8 +58,8 @@ class Settings(BaseSettings):
     # Bridge writer (NATS -> KNX). Off by default so the image releases without
     # any cluster-side effect until the mapping is provisioned and the NATS
     # user has been granted the necessary subscribe permissions.
-    bridge_write_enabled: bool = False
-    bridge_write_mapping_path: Path = Path("/etc/knx-nats-bridge/write-mapping.yaml")
+    bridge_writer_enabled: bool = False
+    bridge_writer_rules_path: Path = Path("/etc/knx-nats-bridge/writer-rules.yaml")
 
     # Observability
     metrics_port: int = 9090
@@ -87,11 +87,11 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _require_mapping_file_when_writer_enabled(self) -> Settings:
-        if self.bridge_write_enabled and not self.bridge_write_mapping_path.exists():
+    def _require_rules_file_when_writer_enabled(self) -> Settings:
+        if self.bridge_writer_enabled and not self.bridge_writer_rules_path.exists():
             raise ValueError(
-                f"BRIDGE_WRITE_ENABLED is true but mapping file "
-                f"{self.bridge_write_mapping_path} does not exist"
+                f"BRIDGE_WRITER_ENABLED is true but rules file "
+                f"{self.bridge_writer_rules_path} does not exist"
             )
         return self
 

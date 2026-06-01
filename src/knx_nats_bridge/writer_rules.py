@@ -1,4 +1,4 @@
-"""Write-mapping loader: YAML file -> validated list of NATS-subject -> KNX-GA rules."""
+"""Writer-rules loader: YAML file -> validated list of NATS-subject -> KNX-GA rules."""
 
 from __future__ import annotations
 
@@ -12,11 +12,11 @@ import jsonschema
 import yaml
 from xknx.dpt import DPTBase
 
-_SCHEMA_PATH = Path(__file__).resolve().parent / "_schemas" / "write-mapping.schema.json"
+_SCHEMA_PATH = Path(__file__).resolve().parent / "_schemas" / "writer-rules.schema.json"
 
 
 @dataclass(frozen=True, slots=True)
-class WriteMapping:
+class WriterRule:
     subject: str
     ga: str
     dpt: str
@@ -24,23 +24,23 @@ class WriteMapping:
     description: str | None = None
 
 
-class WriteMappingTable:
-    def __init__(self, mappings: list[WriteMapping]) -> None:
-        self._mappings = mappings
-        self._by_subject: dict[str, list[WriteMapping]] = {}
-        for m in mappings:
-            self._by_subject.setdefault(m.subject, []).append(m)
+class WriterRules:
+    def __init__(self, rules: list[WriterRule]) -> None:
+        self._rules = rules
+        self._by_subject: dict[str, list[WriterRule]] = {}
+        for r in rules:
+            self._by_subject.setdefault(r.subject, []).append(r)
 
     def __len__(self) -> int:
-        return len(self._mappings)
+        return len(self._rules)
 
-    def __iter__(self) -> Iterator[WriteMapping]:
-        return iter(self._mappings)
+    def __iter__(self) -> Iterator[WriterRule]:
+        return iter(self._rules)
 
     def subjects(self) -> list[str]:
         return list(self._by_subject.keys())
 
-    def for_subject(self, subject: str) -> list[WriteMapping]:
+    def for_subject(self, subject: str) -> list[WriterRule]:
         return self._by_subject.get(subject, [])
 
     @classmethod
@@ -50,7 +50,7 @@ class WriteMappingTable:
         *,
         reader_subject_prefix: str | None = None,
         schema_path: Path | None = None,
-    ) -> WriteMappingTable:
+    ) -> WriterRules:
         raw_text = path.read_text(encoding="utf-8")
         data: Any = yaml.safe_load(raw_text) or {}
         if not isinstance(data, dict):
@@ -63,11 +63,11 @@ class WriteMappingTable:
             schema = json.loads(schema_file.read_text(encoding="utf-8"))
             jsonschema.validate(instance=data, schema=schema)
 
-        mappings: list[WriteMapping] = []
+        rules: list[WriterRule] = []
         for raw in data.get("mappings", []):
             dpt = raw["dpt"]
             if DPTBase.parse_transcoder(dpt) is None:
-                raise ValueError(f"{path}: unknown DPT {dpt!r} in mapping for {raw['subject']!r}")
+                raise ValueError(f"{path}: unknown DPT {dpt!r} in rule for {raw['subject']!r}")
 
             subject = raw["subject"]
             # Loop-protection: a writer subscribed to the reader's own publish-prefix
@@ -80,8 +80,8 @@ class WriteMappingTable:
                     f"{reader_subject_prefix!r} — would create a write/read loop"
                 )
 
-            mappings.append(
-                WriteMapping(
+            rules.append(
+                WriterRule(
                     subject=subject,
                     ga=raw["ga"],
                     dpt=dpt,
@@ -90,7 +90,7 @@ class WriteMappingTable:
                 )
             )
 
-        return cls(mappings)
+        return cls(rules)
 
 
 def extract_value(payload: Any, path: str) -> Any:

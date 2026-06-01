@@ -10,8 +10,8 @@ from xknx.telegram import Telegram
 from xknx.telegram.apci import GroupValueWrite
 
 from knx_nats_bridge.metrics import Metrics
-from knx_nats_bridge.write_mapping import WriteMapping, WriteMappingTable
 from knx_nats_bridge.writer import Writer, _encode_for_dpt
+from knx_nats_bridge.writer_rules import WriterRule, WriterRules
 
 
 class FakeTelegramQueue:
@@ -33,11 +33,11 @@ class FakeMsg:
     data: bytes
 
 
-def _writer(mappings: list[WriteMapping]) -> tuple[Writer, FakeXknx, Metrics]:
+def _writer(mappings: list[WriterRule]) -> tuple[Writer, FakeXknx, Metrics]:
     settings: Any = object()  # _on_message and _apply don't touch settings
     metrics = Metrics()
     xknx = FakeXknx(telegrams=FakeTelegramQueue())
-    table = WriteMappingTable(mappings)
+    table = WriterRules(mappings)
     writer = Writer(settings, table, xknx, metrics)  # type: ignore[arg-type]
     return writer, xknx, metrics
 
@@ -45,7 +45,7 @@ def _writer(mappings: list[WriteMapping]) -> tuple[Writer, FakeXknx, Metrics]:
 @pytest.mark.asyncio
 async def test_binary_mapping_writes_true() -> None:
     writer, xknx, _ = _writer(
-        [WriteMapping("ems-esp.boiler_data", "15/2/1", "1.001", "$.burnstart_active")]
+        [WriterRule("ems-esp.boiler_data", "15/2/1", "1.001", "$.burnstart_active")]
     )
     msg = FakeMsg("ems-esp.boiler_data", json.dumps({"burnstart_active": True}).encode())
     await writer._on_message(msg)  # type: ignore[arg-type]
@@ -61,7 +61,7 @@ async def test_binary_mapping_writes_true() -> None:
 @pytest.mark.asyncio
 async def test_truthy_int_score_writes_true() -> None:
     writer, xknx, _ = _writer(
-        [WriteMapping("unifi.events.fassade.person", "14/3/1", "1.005", "$.score")]
+        [WriterRule("unifi.events.fassade.person", "14/3/1", "1.005", "$.score")]
     )
     msg = FakeMsg("unifi.events.fassade.person", json.dumps({"score": 84}).encode())
     await writer._on_message(msg)  # type: ignore[arg-type]
@@ -75,7 +75,7 @@ async def test_truthy_int_score_writes_true() -> None:
 @pytest.mark.asyncio
 async def test_zero_score_writes_false() -> None:
     writer, xknx, _ = _writer(
-        [WriteMapping("unifi.events.fassade.motion", "14/3/2", "1.005", "$.score")]
+        [WriterRule("unifi.events.fassade.motion", "14/3/2", "1.005", "$.score")]
     )
     msg = FakeMsg("unifi.events.fassade.motion", json.dumps({"score": 0}).encode())
     await writer._on_message(msg)  # type: ignore[arg-type]
@@ -90,8 +90,8 @@ async def test_zero_score_writes_false() -> None:
 async def test_fan_out_one_subject_two_gas() -> None:
     writer, xknx, _ = _writer(
         [
-            WriteMapping("ems-esp.boiler_data", "15/2/1", "1.001", "$.burnstart_active"),
-            WriteMapping("ems-esp.boiler_data", "15/2/2", "9.001", "$.curflowtemp"),
+            WriterRule("ems-esp.boiler_data", "15/2/1", "1.001", "$.burnstart_active"),
+            WriterRule("ems-esp.boiler_data", "15/2/2", "9.001", "$.curflowtemp"),
         ]
     )
     msg = FakeMsg(
@@ -106,7 +106,7 @@ async def test_fan_out_one_subject_two_gas() -> None:
 @pytest.mark.asyncio
 async def test_missing_field_increments_error_metric_and_skips_write() -> None:
     writer, xknx, metrics = _writer(
-        [WriteMapping("ems-esp.boiler_data", "15/2/1", "1.001", "$.missing_field")]
+        [WriterRule("ems-esp.boiler_data", "15/2/1", "1.001", "$.missing_field")]
     )
     msg = FakeMsg("ems-esp.boiler_data", json.dumps({"other": 1}).encode())
     await writer._on_message(msg)  # type: ignore[arg-type]
@@ -118,7 +118,7 @@ async def test_missing_field_increments_error_metric_and_skips_write() -> None:
 @pytest.mark.asyncio
 async def test_bad_json_increments_error_metric_and_skips_all() -> None:
     writer, xknx, metrics = _writer(
-        [WriteMapping("ems-esp.boiler_data", "15/2/1", "1.001", "$.burnstart_active")]
+        [WriterRule("ems-esp.boiler_data", "15/2/1", "1.001", "$.burnstart_active")]
     )
     msg = FakeMsg("ems-esp.boiler_data", b"not-json")
     await writer._on_message(msg)  # type: ignore[arg-type]
@@ -130,7 +130,7 @@ async def test_bad_json_increments_error_metric_and_skips_all() -> None:
 @pytest.mark.asyncio
 async def test_bus_put_failure_recorded_as_error() -> None:
     writer, xknx, metrics = _writer(
-        [WriteMapping("ems-esp.boiler_data", "15/2/1", "1.001", "$.burnstart_active")]
+        [WriterRule("ems-esp.boiler_data", "15/2/1", "1.001", "$.burnstart_active")]
     )
 
     async def boom(_: Telegram) -> None:
