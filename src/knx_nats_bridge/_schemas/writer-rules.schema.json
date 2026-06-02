@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/alexander-zimmermann/knx-nats-bridge/schemas/write-mapping.schema.json",
-  "title": "NATS-to-KNX write mapping",
+  "$id": "https://github.com/alexander-zimmermann/knx-nats-bridge/schemas/writer-rules.schema.json",
+  "title": "NATS-to-KNX writer rules",
   "description": "Declares which NATS subject's events drive which KNX group-address writes.",
   "type": "object",
   "properties": {

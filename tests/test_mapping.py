@@ -9,7 +9,7 @@ from knx_nats_bridge.mapping import GroupAddressMapping
 
 
 def _write(tmp_path: Path, body: str) -> Path:
-    p = tmp_path / "knx-catalog.yaml"
+    p = tmp_path / "ga-catalog.yaml"
     p.write_text(body, encoding="utf-8")
     return p
 

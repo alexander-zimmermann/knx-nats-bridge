@@ -17,8 +17,8 @@ from .mapping import GroupAddressMapping
 from .metrics import Metrics
 from .metrics import serve as serve_metrics
 from .publisher import Publisher
-from .write_mapping import WriteMappingTable
 from .writer import Writer
+from .writer_rules import WriterRules
 
 logger = logging.getLogger(__name__)
 
@@ -45,26 +45,26 @@ async def _amain() -> int:
         settings.knx_gateway_host,
         settings.knx_gateway_port,
         settings.nats_subject_prefix,
-        settings.knx_nats_catalog_path,
+        settings.bridge_ga_catalog_path,
     )
 
-    mapping = GroupAddressMapping.load(settings.knx_nats_catalog_path)
+    mapping = GroupAddressMapping.load(settings.bridge_ga_catalog_path)
     logger.info("loaded %d GA entries", len(mapping))
 
     metrics = Metrics()
     publisher = Publisher(settings, metrics)
     listener = KnxListener(settings, mapping, publisher, metrics)
 
-    write_mappings: WriteMappingTable | None = None
-    if settings.bridge_write_enabled:
-        write_mappings = WriteMappingTable.load(
-            settings.bridge_write_mapping_path,
+    writer_rules: WriterRules | None = None
+    if settings.bridge_writer_enabled:
+        writer_rules = WriterRules.load(
+            settings.bridge_writer_rules_path,
             reader_subject_prefix=settings.nats_subject_prefix,
         )
         logger.info(
-            "writer enabled: %d mappings across %d subjects",
-            len(write_mappings),
-            len(write_mappings.subjects()),
+            "writer enabled: %d rules across %d subjects",
+            len(writer_rules),
+            len(writer_rules.subjects()),
         )
 
     writer: Writer | None = None
@@ -72,7 +72,7 @@ async def _amain() -> int:
     def is_healthy() -> bool:
         if not (publisher.is_connected and listener.connected):
             return False
-        if writer is not None and len(writer._mappings) and not writer.is_connected:
+        if writer is not None and len(writer._rules) and not writer.is_connected:
             return False
         return logger_watchdog_ok(time.monotonic())
 
@@ -86,11 +86,11 @@ async def _amain() -> int:
     try:
         await publisher.connect()
         await listener.start()
-        if write_mappings is not None:
+        if writer_rules is not None:
             xknx_instance = listener.xknx
             if xknx_instance is None:
                 raise RuntimeError("listener.xknx is None after start() — cannot start writer")
-            writer = Writer(settings, write_mappings, xknx_instance, metrics)
+            writer = Writer(settings, writer_rules, xknx_instance, metrics)
             await writer.start()
         logger.info("bridge is up")
         await stop_event.wait()

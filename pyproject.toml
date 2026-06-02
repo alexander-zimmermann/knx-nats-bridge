@@ -1,6 +1,6 @@
 [project]
 name = "knx-nats-bridge"
-version = "0.4.0"
+version = "0.5.0"
 description = "Bridge KNX telegrams to NATS JetStream with DPT decoding"
 readme = "README.md"
 license = "GPL-2.0-or-later"
@@ -75,7 +75,7 @@ ignore_missing_imports = true
 # `dict[str, Any]` at the boundary (return-value).
 module = [
     "knx_nats_bridge.knx",
-    "knx_nats_bridge.write_mapping",
+    "knx_nats_bridge.writer_rules",
     "knx_nats_bridge.writer",
     "knx_nats_bridge.tools.knxproj_to_yaml",
 ]

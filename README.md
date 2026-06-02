@@ -28,8 +28,8 @@ docker run --rm \
   -e KNX_GATEWAY_PORT=3671 \
   -e NATS_SERVERS=nats://nats:4222 \
   -e NATS_SUBJECT_PREFIX=knx \
-  -e KNX_NATS_CATALOG_PATH=/etc/knx-nats-bridge/knx-catalog.yaml \
-  -v $(pwd)/knx-catalog.yaml:/etc/knx-nats-bridge/knx-catalog.yaml:ro \
+  -e BRIDGE_GA_CATALOG_PATH=/etc/knx-nats-bridge/ga-catalog.yaml \
+  -v $(pwd)/ga-catalog.yaml:/etc/knx-nats-bridge/ga-catalog.yaml:ro \
   -v $(pwd)/nats.creds:/etc/knx-nats-bridge/nats.creds:ro \
   ghcr.io/alexander-zimmermann/knx-nats-bridge:latest
 ```
@@ -52,7 +52,7 @@ Secrets are read from files, never from env vars.
 | `KNX_LOCAL_IP`             | —                                       | Optional, for multicast routing                   |
 | `KNX_INDIVIDUAL_ADDRESS`   | —                                       | Optional, e.g. `1.1.250`                          |
 | `KNX_SECURE_KEYRING_FILE`  | —                                       | Optional, path to `.knxkeys` for KNX/IP Secure    |
-| `KNX_NATS_CATALOG_PATH`    | `/etc/knx-nats-bridge/knx-catalog.yaml` | KNX catalog file                                  |
+| `BRIDGE_GA_CATALOG_PATH`   | `/etc/knx-nats-bridge/ga-catalog.yaml`  | GA catalog file                                   |
 | `KNX_NATS_UNMAPPED_POLICY` | `skip`                                  | `skip`, `warn`, or `raw`                          |
 
 ### NATS
@@ -76,16 +76,16 @@ Auth precedence: `NATS_CREDS_FILE` > `NATS_NKEY_SEED_FILE` > `NATS_USER` + `NATS
 | `LOG_LEVEL`    | `INFO`  |                                         |
 | `LOG_FORMAT`   | `json`  | `json` or `text`                        |
 
-## KNX catalog format
+## GA catalog format
 
 YAML file keyed by group address (`<main>/<middle>/<sub>`). Each entry has
 two required fields (`name`, `dpt`) and three optional ones extracted from
 ETS (`room`, `function`, `description`). Validated against
-[src/knx_nats_bridge/\_schemas/knx-catalog.schema.json](src/knx_nats_bridge/_schemas/knx-catalog.schema.json)
+[src/knx_nats_bridge/\_schemas/ga-catalog.schema.json](src/knx_nats_bridge/_schemas/ga-catalog.schema.json)
 at startup.
 
 ```yaml
-# examples/knx-catalog.example.yaml
+# examples/ga-catalog.example.yaml
 "1/2/3":
   name: "Beleuchtung.OG.Schlafzimmer.Decke.Schalten"
   dpt: "1.001"
@@ -113,7 +113,7 @@ table for `function`, and uses the GA's `description`/`comment` field
 verbatim:
 
 ```sh
-knxproj-to-yaml --input project.knxproj --output knx-catalog.yaml \
+knxproj-to-yaml --input project.knxproj --output ga-catalog.yaml \
                 [--password 'ets-password']
 ```
 
