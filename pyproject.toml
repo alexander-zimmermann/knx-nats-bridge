@@ -1,6 +1,6 @@
 [project]
 name = "knx-nats-bridge"
-version = "0.6.1"
+version = "0.7.0"
 description = "Bridge KNX telegrams to NATS JetStream with DPT decoding"
 readme = "README.md"
 license = "GPL-2.0-or-later"
@@ -23,6 +23,7 @@ dependencies = [
     "pydantic-settings>=2.14.1",
     "pyyaml>=6.0.3",
     "jsonschema>=4.26.0",
+    "psycopg[binary]>=3.3.4",
 ]
 
 [project.optional-dependencies]
@@ -42,6 +43,7 @@ dev = [
 
 [project.scripts]
 knx-nats-bridge = "knx_nats_bridge.main:run"
+knx-nats-bridge-import-catalog = "knx_nats_bridge.cli.import_catalog:main"
 knxproj-to-yaml = "knx_nats_bridge.tools.knxproj_to_yaml:main"
 
 [build-system]
