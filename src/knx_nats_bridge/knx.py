@@ -60,7 +60,13 @@ class KnxListener:
     async def start(self) -> None:
         cfg = self._build_connection_config()
         self._xknx = XKNX(connection_config=cfg)
-        self._xknx.telegram_queue.register_telegram_received_cb(self._on_telegram)
+        # match_for_outgoing=True: most IP-Interfaces in tunneling mode don't
+        # echo a tunnel's own writes back as L_Data.ind, so the bridge would
+        # never see its own writes without this. xknx fires the callback
+        # locally before the telegram leaves.
+        self._xknx.telegram_queue.register_telegram_received_cb(
+            self._on_telegram, match_for_outgoing=True
+        )
 
         # State hooks for the tunnel_connected gauge.
         self._xknx.connection_manager.register_connection_state_changed_cb(self._on_state)
