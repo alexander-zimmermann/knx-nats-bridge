@@ -37,6 +37,9 @@ class Writer:
         self._metrics = metrics
         self._nc: NatsClient | None = None
         self._subs: list[Subscription] = []
+        # Last value written per GA, for the deadband filter (_should_write).
+        # Empty on start so every GA gets one fresh write after a restart.
+        self._last_written: dict[str, Any] = {}
 
     @property
     def is_connected(self) -> bool:
@@ -111,6 +114,19 @@ class Writer:
             )
             return
 
+        # Deadband barrier: drop bus-spamming jitter before encoding/sending.
+        if not self._should_write(rule, raw_value):
+            self._metrics.knx_writes.labels(
+                subject=rule.subject, ga=rule.ga, outcome="suppressed"
+            ).inc()
+            logger.debug(
+                "writer: suppressed (deadband) %s -> ga=%s value=%r",
+                rule.subject,
+                rule.ga,
+                raw_value,
+            )
+            return
+
         try:
             dpt_payload = _encode_for_dpt(raw_value, rule.dpt)
         except Exception as exc:
@@ -137,6 +153,9 @@ class Writer:
             logger.exception("writer: bus write failed for ga=%s", rule.ga)
             return
 
+        # Record only after a successful send so the deadband measures against
+        # the last value actually on the bus (a failed write retries next time).
+        self._last_written[rule.ga] = raw_value
         self._metrics.knx_writes.labels(subject=rule.subject, ga=rule.ga, outcome="ok").inc()
         logger.debug(
             "writer: %s -> ga=%s dpt=%s value=%r",
@@ -145,6 +164,31 @@ class Writer:
             rule.dpt,
             raw_value,
         )
+
+    def _should_write(self, rule: WriterRule, new: Any) -> bool:
+        """Deadband: decide whether `new` differs enough from the last write.
+
+        - First value per GA always writes (fresh state after restart).
+        - No thresholds configured -> always write (cyclic-refresh semantics).
+        - Numeric value -> write only when it moved past
+          max(min_delta, min_delta_pct/100 * |last|). Comparing against the
+          last *sent* value means slow drift still eventually crosses the band.
+        - bool / non-numeric -> plain change check.
+        """
+        if rule.ga not in self._last_written:
+            return True
+        if rule.min_delta is None and rule.min_delta_pct is None:
+            return True
+        last = self._last_written[rule.ga]
+        if _is_number(new) and _is_number(last):
+            band = max(rule.min_delta or 0.0, (rule.min_delta_pct or 0.0) / 100.0 * abs(last))
+            return abs(new - last) > band
+        return new != last
+
+
+def _is_number(value: Any) -> bool:
+    """True for int/float but not bool (bool is an int subclass in Python)."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _encode_for_dpt(value: Any, dpt: str) -> DPTArray | DPTBinary:

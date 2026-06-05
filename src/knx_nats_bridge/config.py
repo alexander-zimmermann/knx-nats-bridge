@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     knx_secure_keyring_password: str | None = None
     bridge_ga_catalog_path: Path = Path("/etc/knx-nats-bridge/ga-catalog.yaml")
     knx_nats_unmapped_policy: UnmappedPolicy = UnmappedPolicy.SKIP
+    # Max outgoing bus telegrams per second (xknx paces sends by 1/N seconds).
+    # Caps the writer so NATS bursts don't overload the shared TP1 bus. 0 = off.
+    knx_rate_limit: int = 10
 
     # NATS
     nats_servers: str = "nats://localhost:4222"
@@ -69,6 +72,13 @@ class Settings(BaseSettings):
     @property
     def nats_servers_list(self) -> list[str]:
         return [s.strip() for s in self.nats_servers.split(",") if s.strip()]
+
+    @field_validator("knx_rate_limit")
+    @classmethod
+    def _rate_limit_non_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("KNX_RATE_LIMIT must be >= 0 (0 disables rate limiting)")
+        return v
 
     @field_validator("nats_subject_prefix")
     @classmethod

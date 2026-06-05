@@ -40,6 +40,65 @@ def test_loads_valid_mapping(tmp_path: Path) -> None:
     assert m.description == "Person at fassade"
 
 
+def test_loads_deadband_fields(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+        mappings:
+          - subject: "solaredge-1.powerflow"
+            ga: "15/4/0"
+            dpt: "14.056"
+            payload_path: "$.grid.power"
+            min_delta: 25
+            min_delta_pct: 2
+          - subject: "warp.evse.state"
+            ga: "15/6/0"
+            dpt: "5.010"
+            payload_path: "$.charger_state"
+            min_delta: 0
+        """,
+    )
+    table = WriterRules.load(path)
+    [pv] = table.for_subject("solaredge-1.powerflow")
+    assert pv.min_delta == 25
+    assert pv.min_delta_pct == 2
+    [evse] = table.for_subject("warp.evse.state")
+    assert evse.min_delta == 0
+    assert evse.min_delta_pct is None
+
+
+def test_deadband_fields_optional(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+        mappings:
+          - subject: "unifi.events.fassade.person"
+            ga: "14/3/1"
+            dpt: "1.005"
+            payload_path: "$.knx_value"
+        """,
+    )
+    [m] = WriterRules.load(path).for_subject("unifi.events.fassade.person")
+    assert m.min_delta is None
+    assert m.min_delta_pct is None
+
+
+def test_rejects_negative_min_delta(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+        mappings:
+          - subject: "x"
+            ga: "1/2/3"
+            dpt: "14.056"
+            payload_path: "$.power"
+            min_delta: -1
+        """,
+    )
+    with pytest.raises(jsonschema.ValidationError):
+        WriterRules.load(path)
+
+
 def test_fan_out_multiple_mappings_per_subject(tmp_path: Path) -> None:
     path = _write(
         tmp_path,

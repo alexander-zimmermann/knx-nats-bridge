@@ -59,7 +59,9 @@ class KnxListener:
 
     async def start(self) -> None:
         cfg = self._build_connection_config()
-        self._xknx = XKNX(connection_config=cfg)
+        # rate_limit caps outgoing bus telegrams to N/s (xknx sleeps 1/N between
+        # sends); shields the shared TP1 bus from writer bursts. 0 = unlimited.
+        self._xknx = XKNX(connection_config=cfg, rate_limit=self._settings.knx_rate_limit)
         # match_for_outgoing=True: most IP-Interfaces in tunneling mode don't
         # echo a tunnel's own writes back as L_Data.ind, so the bridge would
         # never see its own writes without this. xknx fires the callback
@@ -71,7 +73,11 @@ class KnxListener:
         # State hooks for the tunnel_connected gauge.
         self._xknx.connection_manager.register_connection_state_changed_cb(self._on_state)
 
-        logger.info("starting xknx (connection_type=%s)", self._settings.knx_connection_type.value)
+        logger.info(
+            "starting xknx (connection_type=%s, rate_limit=%d telegrams/s)",
+            self._settings.knx_connection_type.value,
+            self._settings.knx_rate_limit,
+        )
         await self._xknx.start()
         self._metrics.tunnel_connected.set(1)
 

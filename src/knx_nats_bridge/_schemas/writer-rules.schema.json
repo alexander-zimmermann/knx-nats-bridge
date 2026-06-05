@@ -10,11 +10,13 @@
       "items": {
         "type": "object",
         "properties": {
-          "subject":      { "type": "string", "minLength": 1 },
-          "ga":           { "type": "string", "pattern": "^[0-9]+/[0-9]+/[0-9]+$" },
-          "dpt":          { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
-          "payload_path": { "type": "string", "pattern": "^\\$(\\.[A-Za-z_][A-Za-z0-9_]*)*$" },
-          "description":  { "type": "string" }
+          "subject":       { "type": "string", "minLength": 1 },
+          "ga":            { "type": "string", "pattern": "^[0-9]+/[0-9]+/[0-9]+$" },
+          "dpt":           { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+          "payload_path":  { "type": "string", "pattern": "^\\$(\\.[A-Za-z_][A-Za-z0-9_]*)*$" },
+          "description":   { "type": "string" },
+          "min_delta":     { "type": "number", "minimum": 0 },
+          "min_delta_pct": { "type": "number", "minimum": 0 }
         },
         "required": ["subject", "ga", "dpt", "payload_path"],
         "additionalProperties": false
