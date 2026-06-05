@@ -54,6 +54,7 @@ Secrets are read from files, never from env vars.
 | `KNX_SECURE_KEYRING_FILE`  | —                                       | Optional, path to `.knxkeys` for KNX/IP Secure    |
 | `BRIDGE_GA_CATALOG_PATH`   | `/etc/knx-nats-bridge/ga-catalog.yaml`  | GA catalog file                                   |
 | `KNX_NATS_UNMAPPED_POLICY` | `skip`                                  | `skip`, `warn`, or `raw`                          |
+| `KNX_RATE_LIMIT`           | `10`                                    | Max outgoing bus telegrams/s (writer pacing); `0` disables |
 
 ### NATS
 
@@ -134,6 +135,35 @@ keeps a `(time, ga)` primary key collision-free downstream.
 Payloads are validated against
 [src/knx_nats_bridge/\_schemas/event.schema.json](src/knx_nats_bridge/_schemas/event.schema.json)
 before publishing.
+
+## Writer rules (NATS → KNX)
+
+When `BRIDGE_WRITER_ENABLED=true`, the bridge also subscribes to NATS subjects
+and writes the decoded values back onto the KNX bus, driven by a rules file
+(`BRIDGE_WRITER_RULES_PATH`, validated against
+[src/knx_nats_bridge/\_schemas/writer-rules.schema.json](src/knx_nats_bridge/_schemas/writer-rules.schema.json)).
+
+```yaml
+mappings:
+  - subject: "solaredge-1.powerflow"   # NATS subject to subscribe
+    ga: "15/4/0"                        # target KNX group address
+    dpt: "14.056"                       # DPT used to encode the value
+    payload_path: "$.grid.power"        # JSONPath into the message payload
+    min_delta: 25                       # optional: absolute deadband (value units)
+    min_delta_pct: 2                    # optional: relative deadband (% of last sent)
+```
+
+Two **barriers** keep the shared TP1 bus from being overloaded:
+
+- **Rate limit** — `KNX_RATE_LIMIT` caps outgoing bus telegrams to N/s
+  (xknx paces sends by `1/N` s), smoothing bursts.
+- **Deadband** — per rule, a value is only written when it moved by more than
+  `max(min_delta, min_delta_pct/100 × |last sent|)`. The first value per GA
+  always writes (fresh state after a restart); with neither field set the rule
+  writes every message (cyclic-refresh semantics). `min_delta: 0` means
+  "write only on change". The absolute floor guards against jitter near zero;
+  the relative band covers wide-range signals like PV power. Suppressed writes
+  increment `knx_writes_total{outcome="suppressed"}`.
 
 ## JetStream expectations
 

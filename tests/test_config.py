@@ -21,6 +21,25 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.nats_servers_list == ["nats://localhost:4222"]
 
 
+def test_rate_limit_defaults_to_10(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("KNX_GATEWAY_HOST", "192.0.2.10")
+    monkeypatch.delenv("KNX_RATE_LIMIT", raising=False)
+    assert Settings().knx_rate_limit == 10
+
+
+def test_rate_limit_zero_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("KNX_GATEWAY_HOST", "192.0.2.10")
+    monkeypatch.setenv("KNX_RATE_LIMIT", "0")
+    assert Settings().knx_rate_limit == 0
+
+
+def test_rate_limit_rejects_negative(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("KNX_GATEWAY_HOST", "192.0.2.10")
+    monkeypatch.setenv("KNX_RATE_LIMIT", "-1")
+    with pytest.raises(ValidationError):
+        Settings()
+
+
 def test_subject_prefix_rejects_dot(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("KNX_GATEWAY_HOST", "192.0.2.10")
     monkeypatch.setenv("NATS_SUBJECT_PREFIX", "knx.raw")

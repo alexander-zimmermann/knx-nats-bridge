@@ -150,6 +150,110 @@ async def test_bus_put_failure_recorded_as_error() -> None:
     assert metrics.knx_write_errors.labels(reason="bus")._value.get() == 1
 
 
+def _suppressed(metrics: Metrics, subject: str, ga: str) -> float:
+    return metrics.knx_writes.labels(subject=subject, ga=ga, outcome="suppressed")._value.get()
+
+
+async def _feed(writer: Writer, subject: str, *values: Any) -> None:
+    for v in values:
+        # field name is irrelevant; the rules below all read "$.v"
+        await writer._on_message(FakeMsg(subject, json.dumps({"v": v}).encode()))  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_deadband_absolute_suppresses_small_passes_large() -> None:
+    writer, xknx, metrics = _writer(
+        [WriterRule("solaredge-1.powerflow", "15/4/0", "14.056", "$.v", min_delta=50)]
+    )
+    # 1000 writes (first), +30 suppressed (<50), 1090 writes (+90 vs last sent 1000)
+    await _feed(writer, "solaredge-1.powerflow", 1000, 1030, 1090)
+    assert len(xknx.telegrams.sent) == 2
+    assert _suppressed(metrics, "solaredge-1.powerflow", "15/4/0") == 1
+
+
+@pytest.mark.asyncio
+async def test_min_delta_zero_suppresses_exact_duplicate() -> None:
+    writer, xknx, metrics = _writer(
+        [WriterRule("warp.evse.state", "15/6/0", "5.010", "$.v", min_delta=0)]
+    )
+    await _feed(writer, "warp.evse.state", 2, 2, 3)  # write, suppressed (equal), write
+    assert len(xknx.telegrams.sent) == 2
+    assert _suppressed(metrics, "warp.evse.state", "15/6/0") == 1
+
+
+@pytest.mark.asyncio
+async def test_deadband_relative_band_dominates_at_high_value() -> None:
+    writer, xknx, metrics = _writer(
+        [
+            WriterRule(
+                "solaredge-1.powerflow", "15/4/0", "14.056", "$.v", min_delta=25, min_delta_pct=2
+            )
+        ]
+    )
+    # band at last=8000 is max(25, 160)=160: +100 suppressed, +200 writes
+    await _feed(writer, "solaredge-1.powerflow", 8000, 8100, 8200)
+    assert len(xknx.telegrams.sent) == 2
+    assert _suppressed(metrics, "solaredge-1.powerflow", "15/4/0") == 1
+
+
+@pytest.mark.asyncio
+async def test_deadband_absolute_floor_dominates_at_low_value() -> None:
+    writer, xknx, metrics = _writer(
+        [
+            WriterRule(
+                "solaredge-1.powerflow", "15/4/0", "14.056", "$.v", min_delta=25, min_delta_pct=2
+            )
+        ]
+    )
+    # band at last=100 is max(25, 2)=25: +10 suppressed, +30 writes
+    await _feed(writer, "solaredge-1.powerflow", 100, 110, 130)
+    assert len(xknx.telegrams.sent) == 2
+    assert _suppressed(metrics, "solaredge-1.powerflow", "15/4/0") == 1
+
+
+@pytest.mark.asyncio
+async def test_no_threshold_always_writes() -> None:
+    writer, xknx, metrics = _writer(
+        [WriterRule("solaredge-1.powerflow", "15/4/0", "14.056", "$.v")]
+    )
+    await _feed(writer, "solaredge-1.powerflow", 1000, 1000, 1000)
+    assert len(xknx.telegrams.sent) == 3
+    assert _suppressed(metrics, "solaredge-1.powerflow", "15/4/0") == 0
+
+
+@pytest.mark.asyncio
+async def test_deadband_non_numeric_falls_back_to_equality() -> None:
+    writer, xknx, metrics = _writer(
+        [WriterRule("unifi.events.fassade.person", "14/3/1", "1.005", "$.v", min_delta=1)]
+    )
+    await _feed(writer, "unifi.events.fassade.person", "x", "x", "y")  # write, suppress, write
+    assert len(xknx.telegrams.sent) == 2
+    assert _suppressed(metrics, "unifi.events.fassade.person", "14/3/1") == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_write_does_not_update_deadband_baseline() -> None:
+    writer, xknx, metrics = _writer(
+        [WriterRule("solaredge-1.powerflow", "15/4/0", "14.056", "$.v", min_delta=50)]
+    )
+
+    async def boom(_: Telegram) -> None:
+        raise RuntimeError("bus is down")
+
+    xknx.telegrams.put = boom  # type: ignore[method-assign]
+    await _feed(writer, "solaredge-1.powerflow", 1000)  # attempted, fails -> no baseline
+
+    sent: list[Telegram] = []
+
+    async def ok(t: Telegram) -> None:
+        sent.append(t)
+
+    xknx.telegrams.put = ok  # type: ignore[method-assign]
+    # 1000 is "first seen" again (baseline never recorded), so it must write.
+    await _feed(writer, "solaredge-1.powerflow", 1000)
+    assert len(sent) == 1
+
+
 def test_encode_dpt_1_coerces_truthy() -> None:
     assert isinstance(_encode_for_dpt(True, "1.001"), DPTBinary)
     assert isinstance(_encode_for_dpt(0, "1.001"), DPTBinary)

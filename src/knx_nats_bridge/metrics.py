@@ -88,7 +88,8 @@ class Metrics:
         # surface whether the writer is enabled or not.
         self.knx_writes = Counter(
             "knx_writes_total",
-            "KNX GroupValueWrite operations triggered by NATS events",
+            "KNX GroupValueWrite operations triggered by NATS events "
+            "(outcome: ok | error | suppressed). suppressed = dropped by the deadband.",
             ["subject", "ga", "outcome"],
             registry=self.registry,
         )

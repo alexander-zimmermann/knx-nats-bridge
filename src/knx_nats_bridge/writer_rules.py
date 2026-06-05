@@ -22,6 +22,11 @@ class WriterRule:
     dpt: str
     payload_path: str
     description: str | None = None
+    # Deadband to suppress bus-spamming jitter: only write when the value moved
+    # by more than max(min_delta, min_delta_pct/100 * |last|). Both optional;
+    # min_delta=0 (no pct) means "write only on change". See Writer._should_write.
+    min_delta: float | None = None
+    min_delta_pct: float | None = None
 
 
 class WriterRules:
@@ -87,6 +92,8 @@ class WriterRules:
                     dpt=dpt,
                     payload_path=raw["payload_path"],
                     description=raw.get("description"),
+                    min_delta=raw.get("min_delta"),
+                    min_delta_pct=raw.get("min_delta_pct"),
                 )
             )
 
