@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -39,9 +40,6 @@ class Settings(BaseSettings):
     knx_gateway_host: str | None = None
     knx_gateway_port: int = 3671
     knx_local_ip: str | None = None
-    knx_individual_address: str | None = None
-    knx_secure_keyring_file: Path | None = None
-    knx_secure_keyring_password: str | None = None
     bridge_ga_catalog_path: Path = Path("/etc/knx-nats-bridge/ga-catalog.yaml")
     knx_nats_unmapped_policy: UnmappedPolicy = UnmappedPolicy.SKIP
     # Max outgoing bus telegrams per second (xknx paces sends by 1/N seconds).
@@ -109,3 +107,24 @@ class Settings(BaseSettings):
         if self.nats_user_password_file and self.nats_user_password_file.exists():
             return self.nats_user_password_file.read_text().strip()
         return None
+
+    def nats_auth_kwargs(self) -> dict[str, Any]:
+        """Build the auth subset of NatsClient.connect kwargs.
+
+        Auth precedence: creds file > nkey seed file > user/password.
+        Each form is mutually exclusive in nats-py; pick the first that's configured.
+        """
+        kwargs: dict[str, Any] = {}
+        if self.nats_creds_file and self.nats_creds_file.exists():
+            kwargs["user_credentials"] = str(self.nats_creds_file)
+        elif self.nats_nkey_seed_file and self.nats_nkey_seed_file.exists():
+            kwargs["nkeys_seed"] = str(self.nats_nkey_seed_file)
+        elif self.nats_user:
+            password = self.read_nats_password()
+            if password is None:
+                raise RuntimeError(
+                    "NATS_USER is set but NATS_USER_PASSWORD_FILE is missing or empty"
+                )
+            kwargs["user"] = self.nats_user
+            kwargs["password"] = password
+        return kwargs

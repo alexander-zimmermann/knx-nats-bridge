@@ -62,6 +62,11 @@ class Metrics:
             "1 if NATS client is currently connected, 0 otherwise",
             registry=self.registry,
         )
+        self.writer_nats_connected = Gauge(
+            "knx_writer_nats_connected",
+            "1 if the writer's NATS client is currently connected, 0 otherwise",
+            registry=self.registry,
+        )
         self.last_telegram_ts = Gauge(
             "knx_last_telegram_received_timestamp",
             "Unix timestamp of the last received KNX telegram (seconds)",
@@ -128,10 +133,13 @@ async def serve(
             parts = request_line.decode("ascii", errors="replace").split()
             path = parts[1] if len(parts) >= 2 else "/"
 
+            # The handler serves exactly one response per connection, so
+            # announce that instead of HTTP/1.1's implicit keep-alive.
             if path.startswith("/metrics"):
                 body = generate_latest(metrics.registry)
                 writer.write(
                     b"HTTP/1.1 200 OK\r\n"
+                    b"Connection: close\r\n"
                     + f"Content-Type: {CONTENT_TYPE_LATEST}\r\n".encode("ascii")
                     + f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
                     + body
@@ -146,6 +154,7 @@ async def serve(
                 body = b"ok\n" if ok else b"unhealthy\n"
                 writer.write(
                     b"HTTP/1.1 " + status + b"\r\n"
+                    b"Connection: close\r\n"
                     b"Content-Type: text/plain\r\n"
                     + f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
                     + body
@@ -154,6 +163,7 @@ async def serve(
                 body = b"not found\n"
                 writer.write(
                     b"HTTP/1.1 404 Not Found\r\n"
+                    b"Connection: close\r\n"
                     b"Content-Type: text/plain\r\n"
                     + f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
                     + body

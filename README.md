@@ -50,8 +50,6 @@ Secrets are read from files, never from env vars.
 | `KNX_GATEWAY_HOST`         | —                                       | Gateway IP or hostname (not needed for `routing`) |
 | `KNX_GATEWAY_PORT`         | `3671`                                  |                                                   |
 | `KNX_LOCAL_IP`             | —                                       | Optional, for multicast routing                   |
-| `KNX_INDIVIDUAL_ADDRESS`   | —                                       | Optional, e.g. `1.1.250`                          |
-| `KNX_SECURE_KEYRING_FILE`  | —                                       | Optional, path to `.knxkeys` for KNX/IP Secure    |
 | `BRIDGE_GA_CATALOG_PATH`   | `/etc/knx-nats-bridge/ga-catalog.yaml`  | GA catalog file                                   |
 | `KNX_NATS_UNMAPPED_POLICY` | `skip`                                  | `skip`, `warn`, or `raw`                          |
 | `KNX_RATE_LIMIT`           | `10`                                    | Max outgoing bus telegrams/s (writer pacing); `0` disables |
