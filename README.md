@@ -192,10 +192,14 @@ Exposed on `http://<pod>:${METRICS_PORT}/metrics`:
 - `knx_telegrams_decoded_total{dpt}` — counter, telegrams successfully decoded by DPT (subset of received)
 - `knx_telegrams_unmapped_total` — counter, telegrams whose group address has no mapping entry
 - `knx_telegrams_published_total` — counter, payloads successfully ack'd by NATS JetStream
-- `knx_publish_errors_total{reason}` — counter, reasons: `timeout`, `schema`, `no_stream`, `nak`, `other`
+- `knx_publish_errors_total{reason}` — counter, reasons: `timeout`, `schema`, `no_stream`, `nak`, `queue_full`, `other`
 - `knx_tunnel_connected` — gauge 0/1
 - `nats_connected` — gauge 0/1
+- `knx_writer_nats_connected` — gauge 0/1, the writer's own NATS connection
 - `knx_last_telegram_received_timestamp` — gauge, Unix seconds — use for gap-detection alerts
+- `knx_writes_total{subject,ga,outcome}` — counter, writer-path bus writes (`ok` | `error` | `suppressed`)
+- `knx_write_errors_total{reason}` — counter, reasons: `bad_json`, `payload_path`, `dpt_encode`, `bus`
+- `knx_write_duration_seconds` — histogram, NATS message receipt to bus `put()`
 
 `GET /healthz` returns 200 when KNX tunnel, NATS client, and JetStream stream
 are all reachable. No "silence-based" health gate — a quiet bus is not a
