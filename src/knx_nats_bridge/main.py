@@ -72,7 +72,7 @@ async def _amain() -> int:
     def is_healthy() -> bool:
         if not (publisher.is_connected and listener.connected):
             return False
-        if writer is not None and len(writer._rules) and not writer.is_connected:
+        if writer is not None and writer.has_rules and not writer.is_connected:
             return False
         return logger_watchdog_ok(time.monotonic())
 

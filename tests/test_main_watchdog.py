@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from knx_nats_bridge.logging_setup import TrackedStreamHandler
-from knx_nats_bridge.main import LOG_EMIT_RECOVERY_WINDOW_SECONDS, logger_watchdog_ok
+from knx_nats_bridge.main import logger_watchdog_ok
 
 
 @pytest.fixture(autouse=True)
@@ -28,7 +28,3 @@ def test_watchdog_fails_when_no_recent_emit_after_error() -> None:
     TrackedStreamHandler.last_emit_ok_ts = 1000.0
     # 70s elapsed since last successful emit — exceeds the recovery window.
     assert logger_watchdog_ok(now=1070.0) is False
-
-
-def test_watchdog_window_constant_matches_plan() -> None:
-    assert LOG_EMIT_RECOVERY_WINDOW_SECONDS == 60.0

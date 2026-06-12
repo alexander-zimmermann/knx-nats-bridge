@@ -23,12 +23,17 @@ dependencies = [
     "pydantic-settings>=2.14.1",
     "pyyaml>=6.0.3",
     "jsonschema>=4.26.0",
-    "psycopg[binary]>=3.3.4",
 ]
 
 [project.optional-dependencies]
 tools = [
     "xknxproject>=3.9.0",
+]
+# Only the import-catalog CLI (Kubernetes Job) talks to TimescaleDB; keep
+# psycopg out of plain `pip install knx-nats-bridge`. The container image
+# installs this extra so the same image serves bridge and import job.
+import = [
+    "psycopg[binary]>=3.3.4",
 ]
 dev = [
     "pytest>=9.0.3",

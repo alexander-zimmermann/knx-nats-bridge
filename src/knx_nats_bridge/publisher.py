@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from pathlib import Path
@@ -22,9 +23,22 @@ logger = logging.getLogger(__name__)
 
 _EVENT_SCHEMA_PATH = Path(__file__).resolve().parent / "_schemas" / "event.schema.json"
 
+# Upper bound on queued-but-unpublished events. Sized for a NATS outage on a
+# busy bus (~10 telegrams/s -> ~100 s of buffer); beyond that, new events are
+# dropped with a queue_full metric rather than growing memory unbounded.
+_PUBLISH_QUEUE_MAX = 1000
+
+# How long close() waits for the queue to drain before cancelling the worker.
+_CLOSE_FLUSH_TIMEOUT_SECONDS = 5.0
+
 
 class Publisher:
-    """NATS JetStream publisher with synchronous ack and retry."""
+    """NATS JetStream publisher with synchronous ack and retry.
+
+    Events enter through the synchronous enqueue() (callable from xknx's
+    telegram callback); a single worker task drains the queue, so events are
+    published in bus order.
+    """
 
     def __init__(self, settings: Settings, metrics: Metrics) -> None:
         self._settings = settings
@@ -32,6 +46,10 @@ class Publisher:
         self._nc: NatsClient | None = None
         self._js: JetStreamContext | None = None
         self._schema: dict[str, Any] | None = None
+        self._queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue(
+            maxsize=_PUBLISH_QUEUE_MAX
+        )
+        self._worker: asyncio.Task[None] | None = None
         if _EVENT_SCHEMA_PATH.exists():
             self._schema = json.loads(_EVENT_SCHEMA_PATH.read_text(encoding="utf-8"))
 
@@ -39,31 +57,17 @@ class Publisher:
         if self._nc and self._nc.is_connected:
             return
 
-        kwargs: dict[str, Any] = {
-            "servers": self._settings.nats_servers_list,
-            "max_reconnect_attempts": -1,
-            "reconnect_time_wait": 2,
-            "connect_timeout": 10,
-            "disconnected_cb": self._on_disconnect,
-            "reconnected_cb": self._on_reconnect,
-            "closed_cb": self._on_closed,
-            "error_cb": self._on_error,
-        }
-
-        # Auth precedence: creds file > nkey seed file > user/password.
-        # Each form is mutually exclusive in nats-py; pick the first that's configured.
-        if self._settings.nats_creds_file and self._settings.nats_creds_file.exists():
-            kwargs["user_credentials"] = str(self._settings.nats_creds_file)
-        elif self._settings.nats_nkey_seed_file and self._settings.nats_nkey_seed_file.exists():
-            kwargs["nkeys_seed"] = str(self._settings.nats_nkey_seed_file)
-        elif self._settings.nats_user:
-            password = self._settings.read_nats_password()
-            if password is None:
-                raise RuntimeError(
-                    "NATS_USER is set but NATS_USER_PASSWORD_FILE is missing or empty"
-                )
-            kwargs["user"] = self._settings.nats_user
-            kwargs["password"] = password
+        kwargs = self._settings.nats_auth_kwargs()
+        kwargs.update(
+            servers=self._settings.nats_servers_list,
+            max_reconnect_attempts=-1,
+            reconnect_time_wait=2,
+            connect_timeout=10,
+            disconnected_cb=self._on_disconnect,
+            reconnected_cb=self._on_reconnect,
+            closed_cb=self._on_closed,
+            error_cb=self._on_error,
+        )
 
         self._nc = NatsClient()
         await self._nc.connect(**kwargs)
@@ -73,6 +77,9 @@ class Publisher:
 
         if self._settings.nats_stream_check:
             await self._verify_stream()
+
+        if self._worker is None:
+            self._worker = asyncio.create_task(self._drain_queue())
 
     async def _verify_stream(self) -> None:
         assert self._js is not None
@@ -92,6 +99,14 @@ class Publisher:
             )
 
     async def close(self) -> None:
+        if self._worker is not None:
+            # Best-effort flush so a clean shutdown doesn't drop queued events.
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._queue.join(), timeout=_CLOSE_FLUSH_TIMEOUT_SECONDS)
+            self._worker.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._worker
+            self._worker = None
         if self._nc and self._nc.is_connected:
             await self._nc.drain()
         self._metrics.nats_connected.set(0)
@@ -99,6 +114,32 @@ class Publisher:
     @property
     def is_connected(self) -> bool:
         return bool(self._nc and self._nc.is_connected)
+
+    def enqueue(self, subject: str, payload: dict[str, Any]) -> bool:
+        """Queue one event for publishing; safe to call from sync callbacks.
+
+        Returns False (and counts a queue_full error) when the buffer is full,
+        e.g. during a prolonged NATS outage on a busy bus.
+        """
+        try:
+            self._queue.put_nowait((subject, payload))
+        except asyncio.QueueFull:
+            self._metrics.publish_errors.labels(reason="queue_full").inc()
+            logger.warning(
+                "publish queue full (%d), dropping event for %s", self._queue.maxsize, subject
+            )
+            return False
+        return True
+
+    async def _drain_queue(self) -> None:
+        while True:
+            subject, payload = await self._queue.get()
+            try:
+                await self.publish_event(subject, payload)
+            except Exception:
+                logger.exception("unexpected error publishing %s", subject)
+            finally:
+                self._queue.task_done()
 
     async def publish_event(self, subject: str, payload: dict[str, Any]) -> bool:
         """Validate and publish one event, waiting for a JetStream ack.
@@ -129,9 +170,10 @@ class Publisher:
                 self._metrics.telegrams_published.inc()
                 return True
             except NoStreamResponseError:
+                # Stream/subject misconfiguration: retrying won't help, and any
+                # sleep here would stall the ordered publish queue.
                 self._metrics.publish_errors.labels(reason="no_stream").inc()
                 logger.error("no stream matches subject %s (attempt %d)", subject, attempt)
-                await asyncio.sleep(30)
                 return False
             except NATSTimeoutError:
                 self._metrics.publish_errors.labels(reason="timeout").inc()

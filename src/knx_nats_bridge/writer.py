@@ -45,20 +45,27 @@ class Writer:
     def is_connected(self) -> bool:
         return bool(self._nc and self._nc.is_connected)
 
+    @property
+    def has_rules(self) -> bool:
+        return len(self._rules) > 0
+
     async def start(self) -> None:
-        if not len(self._rules):
+        if not self.has_rules:
             logger.info("writer enabled but rules table is empty — idle")
             return
 
         self._nc = NatsClient()
-        kwargs = _nats_auth_kwargs(self._settings)
+        kwargs = self._settings.nats_auth_kwargs()
         kwargs.update(
             servers=self._settings.nats_servers_list,
             max_reconnect_attempts=-1,
             reconnect_time_wait=2,
             connect_timeout=10,
+            disconnected_cb=self._on_disconnect,
+            reconnected_cb=self._on_reconnect,
         )
         await self._nc.connect(**kwargs)
+        self._metrics.writer_nats_connected.set(1)
         logger.info(
             "writer connected to NATS: %s (%d subjects, %d rules)",
             self._settings.nats_servers_list,
@@ -83,6 +90,15 @@ class Writer:
                 await self._nc.drain()
             except Exception:
                 logger.exception("error draining writer NATS client")
+        self._metrics.writer_nats_connected.set(0)
+
+    async def _on_disconnect(self) -> None:
+        self._metrics.writer_nats_connected.set(0)
+        logger.warning("writer nats disconnected")
+
+    async def _on_reconnect(self) -> None:
+        self._metrics.writer_nats_connected.set(1)
+        logger.info("writer nats reconnected")
 
     async def _on_message(self, msg: Msg) -> None:
         subject = msg.subject
@@ -182,8 +198,8 @@ class Writer:
         last = self._last_written[rule.ga]
         if _is_number(new) and _is_number(last):
             band = max(rule.min_delta or 0.0, (rule.min_delta_pct or 0.0) / 100.0 * abs(last))
-            return abs(new - last) > band
-        return new != last
+            return bool(abs(new - last) > band)
+        return bool(new != last)
 
 
 def _is_number(value: Any) -> bool:
@@ -202,23 +218,3 @@ def _encode_for_dpt(value: Any, dpt: str) -> DPTArray | DPTBinary:
     if main == 1:
         value = bool(value)
     return transcoder.to_knx(value)
-
-
-def _nats_auth_kwargs(settings: Settings) -> dict[str, Any]:
-    """Build the auth subset of NatsClient.connect kwargs from settings.
-
-    Precedence matches publisher.py: creds file > nkey seed file > user/password.
-    Each form is mutually exclusive in nats-py.
-    """
-    kwargs: dict[str, Any] = {}
-    if settings.nats_creds_file and settings.nats_creds_file.exists():
-        kwargs["user_credentials"] = str(settings.nats_creds_file)
-    elif settings.nats_nkey_seed_file and settings.nats_nkey_seed_file.exists():
-        kwargs["nkeys_seed"] = str(settings.nats_nkey_seed_file)
-    elif settings.nats_user:
-        password = settings.read_nats_password()
-        if password is None:
-            raise RuntimeError("NATS_USER is set but NATS_USER_PASSWORD_FILE is missing or empty")
-        kwargs["user"] = settings.nats_user
-        kwargs["password"] = password
-    return kwargs
