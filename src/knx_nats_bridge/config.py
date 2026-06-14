@@ -62,6 +62,13 @@ class Settings(BaseSettings):
     bridge_writer_enabled: bool = False
     bridge_writer_rules_path: Path = Path("/etc/knx-nats-bridge/writer-rules.yaml")
 
+    # Read responder (KNX -> KNX). When enabled, the bridge answers GroupValueRead
+    # requests for the GAs it writes (writer rules) with the last value it put on
+    # the bus, so visualisations that poll on startup get a value for slow-changing
+    # datapoints instead of a default 0. Requires the writer to be enabled — the
+    # responder sources its values from the writer's last-written cache.
+    bridge_read_responder_enabled: bool = False
+
     # Observability
     metrics_port: int = 9090
     log_level: str = "INFO"
@@ -100,6 +107,15 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"BRIDGE_WRITER_ENABLED is true but rules file "
                 f"{self.bridge_writer_rules_path} does not exist"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _read_responder_requires_writer(self) -> Settings:
+        if self.bridge_read_responder_enabled and not self.bridge_writer_enabled:
+            raise ValueError(
+                "BRIDGE_READ_RESPONDER_ENABLED is true but BRIDGE_WRITER_ENABLED is "
+                "false; the responder answers reads for the writer's group addresses"
             )
         return self
 

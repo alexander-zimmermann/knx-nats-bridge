@@ -44,15 +44,15 @@ Secrets are read from files, never from env vars.
 
 ### KNX
 
-| Var                        | Default                                 | Description                                       |
-| -------------------------- | --------------------------------------- | ------------------------------------------------- |
-| `KNX_CONNECTION_TYPE`      | `tunneling_tcp`                         | `tunneling_tcp`, `tunneling_udp`, or `routing`    |
-| `KNX_GATEWAY_HOST`         | —                                       | Gateway IP or hostname (not needed for `routing`) |
-| `KNX_GATEWAY_PORT`         | `3671`                                  |                                                   |
-| `KNX_LOCAL_IP`             | —                                       | Optional, for multicast routing                   |
-| `BRIDGE_GA_CATALOG_PATH`   | `/etc/knx-nats-bridge/ga-catalog.yaml`  | GA catalog file                                   |
-| `KNX_NATS_UNMAPPED_POLICY` | `skip`                                  | `skip`, `warn`, or `raw`                          |
-| `KNX_RATE_LIMIT`           | `10`                                    | Max outgoing bus telegrams/s (writer pacing); `0` disables |
+| Var                        | Default                                | Description                                                |
+| -------------------------- | -------------------------------------- | ---------------------------------------------------------- |
+| `KNX_CONNECTION_TYPE`      | `tunneling_tcp`                        | `tunneling_tcp`, `tunneling_udp`, or `routing`             |
+| `KNX_GATEWAY_HOST`         | —                                      | Gateway IP or hostname (not needed for `routing`)          |
+| `KNX_GATEWAY_PORT`         | `3671`                                 |                                                            |
+| `KNX_LOCAL_IP`             | —                                      | Optional, for multicast routing                            |
+| `BRIDGE_GA_CATALOG_PATH`   | `/etc/knx-nats-bridge/ga-catalog.yaml` | GA catalog file                                            |
+| `KNX_NATS_UNMAPPED_POLICY` | `skip`                                 | `skip`, `warn`, or `raw`                                   |
+| `KNX_RATE_LIMIT`           | `10`                                   | Max outgoing bus telegrams/s (writer pacing); `0` disables |
 
 ### NATS
 
@@ -143,12 +143,12 @@ and writes the decoded values back onto the KNX bus, driven by a rules file
 
 ```yaml
 mappings:
-  - subject: "solaredge-1.powerflow"   # NATS subject to subscribe
-    ga: "15/4/0"                        # target KNX group address
-    dpt: "14.056"                       # DPT used to encode the value
-    payload_path: "$.grid.power"        # JSONPath into the message payload
-    min_delta: 25                       # optional: absolute deadband (value units)
-    min_delta_pct: 2                    # optional: relative deadband (% of last sent)
+  - subject: "solaredge-1.powerflow" # NATS subject to subscribe
+    ga: "15/4/0" # target KNX group address
+    dpt: "14.056" # DPT used to encode the value
+    payload_path: "$.grid.power" # JSONPath into the message payload
+    min_delta: 25 # optional: absolute deadband (value units)
+    min_delta_pct: 2 # optional: relative deadband (% of last sent)
 ```
 
 Two **barriers** keep the shared TP1 bus from being overloaded:
@@ -162,6 +162,32 @@ Two **barriers** keep the shared TP1 bus from being overloaded:
   "write only on change". The absolute floor guards against jitter near zero;
   the relative band covers wide-range signals like PV power. Suppressed writes
   increment `knx_writes_total{outcome="suppressed"}`.
+
+## Read responder (KNX → KNX)
+
+When `BRIDGE_READ_RESPONDER_ENABLED=true` (requires `BRIDGE_WRITER_ENABLED=true`),
+the bridge answers `GroupValueRead` requests for the group addresses it writes
+with the last value it put on the bus. The writer is the sole producer of those
+GAs — no physical device owns them — so a visualisation that polls on startup
+(e.g. a Basalte panel sending a read for a slow-changing datapoint like a DHW
+setpoint) would otherwise get no response and show a default `0`. The responder
+serves the writer's last-written value instead.
+
+- **Scope** — only GAs present in the writer rules are answered; reads for any
+  other GA are ignored, so the bridge never collides with a real device's
+  response.
+- **Cold start** — right after a restart, before the first write for a GA, there
+  is nothing cached; the responder stays silent (counted as
+  `knx_read_responses_total{outcome="no_value"}`) rather than answer with a
+  guess. The cache fills on the next message from the source subject.
+- **Pacing** — responses go through the same `KNX_RATE_LIMIT` as writes.
+- **Round-trip** — the bridge sees its own response (`match_for_outgoing`) and
+  publishes it to NATS like any other value telegram. This is the same behaviour
+  as when a real device answers an ETS read; the value is unchanged, only the
+  timestamp is new.
+
+Answered reads increment `knx_read_responses_total{ga,outcome}`
+(`ok` | `no_value` | `error`).
 
 ## JetStream expectations
 
