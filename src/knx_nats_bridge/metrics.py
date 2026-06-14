@@ -110,6 +110,17 @@ class Metrics:
             registry=self.registry,
         )
 
+        # Read-responder path (KNX -> KNX). GroupValueRead requests answered with
+        # the writer's last-written value. outcome: ok | no_value (nothing cached
+        # yet, e.g. right after restart) | error (DPT encode/bus failure).
+        self.knx_read_responses = Counter(
+            "knx_read_responses_total",
+            "GroupValueRead requests handled by the read responder "
+            "(outcome: ok | no_value | error)",
+            ["ga", "outcome"],
+            registry=self.registry,
+        )
+
 
 async def serve(
     metrics: Metrics,

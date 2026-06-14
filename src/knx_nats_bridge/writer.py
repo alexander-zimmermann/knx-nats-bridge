@@ -14,7 +14,7 @@ from xknx import XKNX
 from xknx.dpt import DPTArray, DPTBase, DPTBinary
 from xknx.telegram import Telegram
 from xknx.telegram.address import GroupAddress
-from xknx.telegram.apci import GroupValueWrite
+from xknx.telegram.apci import GroupValueRead, GroupValueResponse, GroupValueWrite
 
 from .config import Settings
 from .metrics import Metrics
@@ -40,6 +40,13 @@ class Writer:
         # Last value written per GA, for the deadband filter (_should_write).
         # Empty on start so every GA gets one fresh write after a restart.
         self._last_written: dict[str, Any] = {}
+        # GA -> rule index for the read responder: the first rule per GA supplies
+        # the DPT used to encode the cached value into a GroupValueResponse.
+        self._rule_by_ga: dict[str, WriterRule] = {}
+        for r in rules:
+            self._rule_by_ga.setdefault(r.ga, r)
+        # Handle for the responder's telegram callback, so stop() can unregister it.
+        self._read_cb: Any = None
 
     @property
     def is_connected(self) -> bool:
@@ -78,7 +85,24 @@ class Writer:
             self._subs.append(sub)
             logger.info("writer subscribed: %s", subject)
 
+        if self._settings.bridge_read_responder_enabled:
+            # Answer GroupValueRead for the GAs we write. Filter to those GAs so
+            # the callback never fires for foreign traffic. match_for_outgoing is
+            # False: we react only to reads from the bus, never to our own response.
+            self._read_cb = self._xknx.telegram_queue.register_telegram_received_cb(
+                self._on_read_request,
+                group_addresses=[GroupAddress(ga) for ga in self._rule_by_ga],
+                match_for_outgoing=False,
+            )
+            logger.info("read responder enabled for %d group addresses", len(self._rule_by_ga))
+
     async def stop(self) -> None:
+        if self._read_cb is not None:
+            try:
+                self._xknx.telegram_queue.unregister_telegram_received_cb(self._read_cb)
+            except Exception:
+                logger.exception("error unregistering read-responder callback")
+            self._read_cb = None
         for sub in self._subs:
             try:
                 await sub.unsubscribe()
@@ -180,6 +204,44 @@ class Writer:
             rule.dpt,
             raw_value,
         )
+
+    def _on_read_request(self, telegram: Telegram) -> None:
+        """Answer a GroupValueRead for a written GA with the last value put on the bus.
+
+        Sync callback (xknx invokes telegram_received_cbs synchronously). Sending
+        uses put_nowait on the unbounded telegram queue, so no await is needed; the
+        outgoing GroupValueResponse is still paced by the bus rate limit.
+        """
+        if not isinstance(telegram.payload, GroupValueRead):
+            return
+        dest = telegram.destination_address
+        if not isinstance(dest, GroupAddress):
+            return
+        ga = str(dest)
+        rule = self._rule_by_ga.get(ga)
+        if rule is None:
+            return  # not a GA we own; the group_addresses filter should exclude it
+        if ga not in self._last_written:
+            # No value cached yet (e.g. right after a restart, before the first
+            # write for this GA). Stay silent rather than answer with a guess.
+            self._metrics.knx_read_responses.labels(ga=ga, outcome="no_value").inc()
+            logger.debug("read responder: no cached value for ga=%s yet", ga)
+            return
+        try:
+            dpt_payload = _encode_for_dpt(self._last_written[ga], rule.dpt)
+        except Exception:
+            self._metrics.knx_read_responses.labels(ga=ga, outcome="error").inc()
+            logger.exception("read responder: cannot encode cached value for ga=%s", ga)
+            return
+        response = Telegram(destination_address=dest, payload=GroupValueResponse(dpt_payload))
+        try:
+            self._xknx.telegrams.put_nowait(response)
+        except Exception:
+            self._metrics.knx_read_responses.labels(ga=ga, outcome="error").inc()
+            logger.exception("read responder: failed to enqueue response for ga=%s", ga)
+            return
+        self._metrics.knx_read_responses.labels(ga=ga, outcome="ok").inc()
+        logger.debug("read responder: answered ga=%s value=%r", ga, self._last_written[ga])
 
     def _should_write(self, rule: WriterRule, new: Any) -> bool:
         """Deadband: decide whether `new` differs enough from the last write.

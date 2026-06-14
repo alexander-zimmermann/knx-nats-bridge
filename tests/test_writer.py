@@ -7,7 +7,8 @@ from typing import Any
 import pytest
 from xknx.dpt import DPT2ByteFloat, DPTBinary
 from xknx.telegram import Telegram
-from xknx.telegram.apci import GroupValueWrite
+from xknx.telegram.address import GroupAddress
+from xknx.telegram.apci import GroupValueRead, GroupValueResponse, GroupValueWrite
 
 from knx_nats_bridge.metrics import Metrics
 from knx_nats_bridge.writer import Writer, _encode_for_dpt
@@ -19,6 +20,9 @@ class FakeTelegramQueue:
         self.sent: list[Telegram] = []
 
     async def put(self, telegram: Telegram) -> None:
+        self.sent.append(telegram)
+
+    def put_nowait(self, telegram: Telegram) -> None:
         self.sent.append(telegram)
 
 
@@ -269,3 +273,69 @@ def test_encode_dpt_9_passes_float() -> None:
 def test_encode_unknown_dpt_raises() -> None:
     with pytest.raises(ValueError, match="unknown DPT"):
         _encode_for_dpt(1, "999.999")
+
+
+# --- read responder -------------------------------------------------------
+
+
+def _read(ga: str) -> Telegram:
+    return Telegram(destination_address=GroupAddress(ga), payload=GroupValueRead())
+
+
+def _responses(metrics: Metrics, ga: str, outcome: str) -> float:
+    return metrics.knx_read_responses.labels(ga=ga, outcome=outcome)._value.get()
+
+
+def test_read_responder_answers_with_cached_value() -> None:
+    writer, xknx, metrics = _writer(
+        [WriterRule("ems-esp.boiler_data_dhw", "15/2/17", "9.001", "$.wwseltemp")]
+    )
+    # Simulate a prior write so the responder has a last-known value to serve.
+    writer._last_written["15/2/17"] = 50.0
+
+    writer._on_read_request(_read("15/2/17"))
+
+    [telegram] = xknx.telegrams.sent
+    assert str(telegram.destination_address) == "15/2/17"
+    assert isinstance(telegram.payload, GroupValueResponse)
+    assert DPT2ByteFloat.from_knx(telegram.payload.value) == pytest.approx(50.0, abs=0.1)
+    assert _responses(metrics, "15/2/17", "ok") == 1
+
+
+def test_read_responder_stays_silent_without_cached_value() -> None:
+    writer, xknx, metrics = _writer(
+        [WriterRule("ems-esp.boiler_data_dhw", "15/2/17", "9.001", "$.wwseltemp")]
+    )
+    # No prior write -> nothing cached (e.g. right after a restart).
+    writer._on_read_request(_read("15/2/17"))
+
+    assert xknx.telegrams.sent == []
+    assert _responses(metrics, "15/2/17", "no_value") == 1
+
+
+def test_read_responder_ignores_foreign_ga() -> None:
+    writer, xknx, _ = _writer(
+        [WriterRule("ems-esp.boiler_data_dhw", "15/2/17", "9.001", "$.wwseltemp")]
+    )
+    writer._last_written["15/2/17"] = 50.0
+
+    # A read for a GA the writer does not own must not be answered.
+    writer._on_read_request(_read("0/0/1"))
+
+    assert xknx.telegrams.sent == []
+
+
+def test_read_responder_ignores_non_read_telegram() -> None:
+    writer, xknx, _ = _writer(
+        [WriterRule("ems-esp.boiler_data_dhw", "15/2/17", "9.001", "$.wwseltemp")]
+    )
+    writer._last_written["15/2/17"] = 50.0
+
+    # A GroupValueWrite on an owned GA is not a read request -> ignore it.
+    write = Telegram(
+        destination_address=GroupAddress("15/2/17"),
+        payload=GroupValueWrite(_encode_for_dpt(42.0, "9.001")),
+    )
+    writer._on_read_request(write)
+
+    assert xknx.telegrams.sent == []
