@@ -121,10 +121,13 @@ knxproj-to-yaml --input project.knxproj --output ga-catalog.yaml \
 Flat JSON, one object per telegram. Native DPT types preserved.
 
 ```json
-{"ga":"1/2/3","name":"Hallway light","dpt":"1.001","value":true,"ts":"2026-04-22T12:34:56.789123Z"}
-{"ga":"2/1/5","name":"Living room temperature","dpt":"9.001","value":21.5,"ts":"..."}
-{"ga":"3/2/7","name":"Heat pump energy counter","dpt":"13.013","value":123456,"ts":"..."}
+{"ga":"1/2/3","name":"Hallway light","dpt":"1.001","value":true,"source":"1.1.5","ts":"2026-04-22T12:34:56.789123Z"}
+{"ga":"2/1/5","name":"Living room temperature","dpt":"9.001","value":21.5,"source":"1.1.8","ts":"..."}
+{"ga":"3/2/7","name":"Heat pump energy counter","dpt":"13.013","value":123456,"source":"1.0.1","ts":"..."}
 ```
+
+`source` is the sending device's KNX individual address (`area.line.device`),
+so downstream can tell which bus device set a group address.
 
 Timestamp is RFC3339 UTC with microsecond precision (Python `datetime` upper
 bound). KNX can deliver several telegrams per second; microsecond resolution
