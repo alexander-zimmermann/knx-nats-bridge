@@ -37,6 +37,7 @@ def _event(**overrides: Any) -> dict[str, Any]:
         "name": "Licht Flur",
         "dpt": "1.001",
         "value": True,
+        "source": "1.1.5",
         "ts": "2026-01-01T00:00:00.000000Z",
     }
     payload.update(overrides)

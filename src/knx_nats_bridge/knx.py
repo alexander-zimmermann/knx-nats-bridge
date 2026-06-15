@@ -162,6 +162,9 @@ class KnxListener:
             "name": entry.name,
             "dpt": entry.dpt,
             "value": dpt_value,
+            # Source individual address ("area.line.device") of the bus device
+            # that sent the telegram — lets downstream answer "who set this GA".
+            "source": str(telegram.source_address),
             "ts": _now_rfc3339_micros(),
         }
         # Sync callback context: hand off to the publisher's bounded queue.

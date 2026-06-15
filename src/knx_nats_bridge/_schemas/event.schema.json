@@ -9,8 +9,9 @@
     "name":  { "type": "string", "minLength": 1 },
     "dpt":   { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
     "value": { "type": ["boolean", "number", "integer", "string", "null", "array"] },
+    "source": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
     "ts":    { "type": "string", "format": "date-time" }
   },
-  "required": ["ga", "name", "dpt", "value", "ts"],
+  "required": ["ga", "name", "dpt", "value", "source", "ts"],
   "additionalProperties": true
 }

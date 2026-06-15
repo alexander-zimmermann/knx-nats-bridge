@@ -6,7 +6,7 @@ import pytest
 from xknx.core import XknxConnectionState
 from xknx.dpt import DPT2ByteFloat, DPTArray, DPTBinary
 from xknx.telegram import Telegram
-from xknx.telegram.address import GroupAddress
+from xknx.telegram.address import GroupAddress, IndividualAddress
 from xknx.telegram.apci import GroupValueRead, GroupValueWrite
 
 from knx_nats_bridge.config import Settings, UnmappedPolicy
@@ -51,8 +51,12 @@ def _listener(
     return listener, publisher, metrics
 
 
-def _write_telegram(ga: str, value: DPTArray | DPTBinary) -> Telegram:
-    return Telegram(destination_address=GroupAddress(ga), payload=GroupValueWrite(value))
+def _write_telegram(ga: str, value: DPTArray | DPTBinary, source: str = "1.1.5") -> Telegram:
+    return Telegram(
+        destination_address=GroupAddress(ga),
+        source_address=IndividualAddress(source),
+        payload=GroupValueWrite(value),
+    )
 
 
 def test_connected_is_false_for_disconnected_state() -> None:
@@ -87,6 +91,7 @@ def test_mapped_telegram_is_enqueued() -> None:
     assert payload["name"] == "Licht Flur"
     assert payload["dpt"] == "1.001"
     assert payload["value"] is True
+    assert payload["source"] == "1.1.5"
     assert payload["ts"].endswith("Z")
     assert metrics.telegrams_received._value.get() == 1
 

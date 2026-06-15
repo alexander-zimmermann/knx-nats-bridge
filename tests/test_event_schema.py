@@ -24,6 +24,7 @@ _VALID_PAYLOADS: list[dict[str, Any]] = [
         "name": "X",
         "dpt": "1.001",
         "value": True,
+        "source": "1.1.5",
         "ts": "2026-04-22T12:34:56.789Z",
     },
     {
@@ -31,6 +32,7 @@ _VALID_PAYLOADS: list[dict[str, Any]] = [
         "name": "X",
         "dpt": "9.001",
         "value": 21.5,
+        "source": "0.0.0",
         "ts": "2026-04-22T12:34:56Z",
     },
     {
@@ -38,14 +40,40 @@ _VALID_PAYLOADS: list[dict[str, Any]] = [
         "name": "E",
         "dpt": "13.013",
         "value": 12345,
+        "source": "15.15.255",
         "ts": "2026-04-22T12:34:56.123456789Z",
     },
 ]
 
 _INVALID_PAYLOADS: list[dict[str, Any]] = [
-    {"ga": "1.2.3", "name": "X", "dpt": "1.001", "value": True, "ts": "2026-04-22T12:34:56Z"},
-    {"ga": "1/2/3", "dpt": "1.001", "value": True, "ts": "2026-04-22T12:34:56Z"},
-    {"ga": "1/2/3", "name": "X", "dpt": "1-001", "value": True, "ts": "2026-04-22T12:34:56Z"},
+    {
+        "ga": "1.2.3",
+        "name": "X",
+        "dpt": "1.001",
+        "value": True,
+        "source": "1.1.5",
+        "ts": "2026-04-22T12:34:56Z",
+    },
+    {"ga": "1/2/3", "dpt": "1.001", "value": True, "source": "1.1.5", "ts": "2026-04-22T12:34:56Z"},
+    {
+        "ga": "1/2/3",
+        "name": "X",
+        "dpt": "1-001",
+        "value": True,
+        "source": "1.1.5",
+        "ts": "2026-04-22T12:34:56Z",
+    },
+    # source in GA-style "a/b/c" instead of individual-address "a.b.c"
+    {
+        "ga": "1/2/3",
+        "name": "X",
+        "dpt": "1.001",
+        "value": True,
+        "source": "1/1/5",
+        "ts": "2026-04-22T12:34:56Z",
+    },
+    # source missing entirely
+    {"ga": "1/2/3", "name": "X", "dpt": "1.001", "value": True, "ts": "2026-04-22T12:34:56Z"},
 ]
 
 
