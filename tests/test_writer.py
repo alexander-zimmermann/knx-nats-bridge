@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
+from nats.errors import TimeoutError as NATSTimeoutError
+from nats.js.errors import NotFoundError
 from xknx.dpt import DPT2ByteFloat, DPTBinary
 from xknx.telegram import Telegram
 from xknx.telegram.address import GroupAddress
@@ -339,3 +341,140 @@ def test_read_responder_ignores_non_read_telegram() -> None:
     writer._on_read_request(write)
 
     assert xknx.telegrams.sent == []
+
+
+# --- startup seed (JetStream -> responder cache) ---------------------------
+
+
+@dataclass
+class FakeJSMsg:
+    data: bytes
+    acked: bool = False
+
+    async def ack(self) -> None:
+        self.acked = True
+
+
+class FakePullSub:
+    def __init__(self, msgs: list[FakeJSMsg], raise_on_fetch: Exception | None = None) -> None:
+        self._msgs = msgs
+        self._raise = raise_on_fetch
+        self.unsubscribed = False
+
+    async def fetch(self, batch: int = 1, **_kwargs: Any) -> list[FakeJSMsg]:
+        if self._raise is not None:
+            raise self._raise
+        return self._msgs[:batch]
+
+    async def unsubscribe(self) -> None:
+        self.unsubscribed = True
+
+
+class FakeJetStream:
+    """Minimal pull_subscribe stub: maps subject -> last message / failure mode."""
+
+    def __init__(
+        self,
+        last_by_subject: dict[str, bytes] | None = None,
+        no_stream_subjects: set[str] | None = None,
+        empty_subjects: set[str] | None = None,
+    ) -> None:
+        self.last_by_subject = last_by_subject or {}
+        self.no_stream = no_stream_subjects or set()
+        self.empty = empty_subjects or set()
+        self.subs: list[FakePullSub] = []
+
+    async def pull_subscribe(self, subject: str, **_kwargs: Any) -> FakePullSub:
+        if subject in self.no_stream:
+            raise NotFoundError
+        if subject in self.empty:
+            sub = FakePullSub([], raise_on_fetch=NATSTimeoutError())
+        else:
+            data = self.last_by_subject.get(subject)
+            sub = FakePullSub([FakeJSMsg(data)] if data is not None else [])
+        self.subs.append(sub)
+        return sub
+
+
+def _seed(metrics: Metrics, subject: str, outcome: str) -> float:
+    return metrics.knx_seed.labels(subject=subject, outcome=outcome)._value.get()
+
+
+@pytest.mark.asyncio
+async def test_seed_populates_cache_without_bus_write() -> None:
+    writer, xknx, metrics = _writer(
+        [WriterRule("warp.evse.state", "15/6/0", "5.010", "$.error_state", seed_on_start=True)]
+    )
+    writer._js = FakeJetStream(  # type: ignore[assignment]
+        last_by_subject={"warp.evse.state": json.dumps({"error_state": 0}).encode()}
+    )
+
+    await writer._seed_last_written()
+
+    # Cache primed, but nothing written to the bus (cache-only seeding).
+    assert writer._last_written == {"15/6/0": 0}
+    assert xknx.telegrams.sent == []
+    assert _seed(metrics, "warp.evse.state", "ok") == 1
+    # The responder now answers a read that would have been silent after a restart.
+    writer._on_read_request(_read("15/6/0"))
+    [telegram] = xknx.telegrams.sent
+    assert isinstance(telegram.payload, GroupValueResponse)
+
+
+@pytest.mark.asyncio
+async def test_seed_skips_subject_without_stream() -> None:
+    writer, xknx, metrics = _writer(
+        [WriterRule("warp.evse.state", "15/6/0", "5.010", "$.error_state", seed_on_start=True)]
+    )
+    writer._js = FakeJetStream(no_stream_subjects={"warp.evse.state"})  # type: ignore[assignment]
+
+    await writer._seed_last_written()
+
+    assert writer._last_written == {}
+    assert xknx.telegrams.sent == []
+    assert _seed(metrics, "warp.evse.state", "no_stream") == 1
+
+
+@pytest.mark.asyncio
+async def test_seed_handles_empty_stream() -> None:
+    writer, _, metrics = _writer(
+        [WriterRule("warp.evse.state", "15/6/0", "5.010", "$.error_state", seed_on_start=True)]
+    )
+    writer._js = FakeJetStream(empty_subjects={"warp.evse.state"})  # type: ignore[assignment]
+
+    await writer._seed_last_written()
+
+    assert writer._last_written == {}
+    assert _seed(metrics, "warp.evse.state", "no_message") == 1
+
+
+@pytest.mark.asyncio
+async def test_seed_only_touches_flagged_rules() -> None:
+    writer, _, _ = _writer(
+        [
+            WriterRule("warp.evse.state", "15/6/0", "5.010", "$.error_state", seed_on_start=True),
+            WriterRule("warp.evse.state", "15/6/2", "5.010", "$.charger_state"),
+        ]
+    )
+    writer._js = FakeJetStream(  # type: ignore[assignment]
+        last_by_subject={
+            "warp.evse.state": json.dumps({"error_state": 0, "charger_state": 2}).encode()
+        }
+    )
+
+    await writer._seed_last_written()
+
+    # Only the seed_on_start rule is cached; the unflagged sibling GA is not.
+    assert writer._last_written == {"15/6/0": 0}
+
+
+@pytest.mark.asyncio
+async def test_seed_noop_when_no_subjects_flagged() -> None:
+    writer, _, _ = _writer([WriterRule("warp.evse.state", "15/6/0", "5.010", "$.error_state")])
+    js = FakeJetStream(last_by_subject={"warp.evse.state": b"{}"})
+    writer._js = js  # type: ignore[assignment]
+
+    await writer._seed_last_written()
+
+    assert writer._last_written == {}
+    assert js.subs == []  # no JetStream call at all

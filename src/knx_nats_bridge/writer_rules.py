@@ -27,6 +27,11 @@ class WriterRule:
     # min_delta=0 (no pct) means "write only on change". See Writer._should_write.
     min_delta: float | None = None
     min_delta_pct: float | None = None
+    # On startup, prime the read responder by loading this GA's last value from
+    # JetStream into the writer's cache. Only useful for event-driven subjects
+    # whose value otherwise wouldn't arrive again until the next change (e.g.
+    # warp.evse.state). Requires the subject to be JetStream-backed.
+    seed_on_start: bool = False
 
 
 class WriterRules:
@@ -44,6 +49,14 @@ class WriterRules:
 
     def subjects(self) -> list[str]:
         return list(self._by_subject.keys())
+
+    def seed_subjects(self) -> list[str]:
+        """Distinct subjects with at least one rule flagged seed_on_start."""
+        return [
+            subject
+            for subject, rules in self._by_subject.items()
+            if any(r.seed_on_start for r in rules)
+        ]
 
     def for_subject(self, subject: str) -> list[WriterRule]:
         return self._by_subject.get(subject, [])
@@ -94,6 +107,7 @@ class WriterRules:
                     description=raw.get("description"),
                     min_delta=raw.get("min_delta"),
                     min_delta_pct=raw.get("min_delta_pct"),
+                    seed_on_start=raw.get("seed_on_start", False),
                 )
             )
 

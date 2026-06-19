@@ -83,6 +83,51 @@ def test_deadband_fields_optional(tmp_path: Path) -> None:
     assert m.min_delta_pct is None
 
 
+def test_seed_on_start_parsed_and_defaults_false(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+        mappings:
+          - subject: "warp.evse.state"
+            ga: "15/6/0"
+            dpt: "5.010"
+            payload_path: "$.error_state"
+            seed_on_start: true
+          - subject: "warp.evse.state"
+            ga: "15/6/2"
+            dpt: "5.010"
+            payload_path: "$.charger_state"
+          - subject: "wallbox.knx.meter"
+            ga: "15/6/10"
+            dpt: "14.056"
+            payload_path: "$.power"
+        """,
+    )
+    table = WriterRules.load(path)
+    by_ga = {r.ga: r for r in table}
+    assert by_ga["15/6/0"].seed_on_start is True
+    assert by_ga["15/6/2"].seed_on_start is False  # default
+    assert by_ga["15/6/10"].seed_on_start is False
+    # A subject is seedable if ANY of its rules opts in.
+    assert table.seed_subjects() == ["warp.evse.state"]
+
+
+def test_rejects_unknown_rule_key(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+        mappings:
+          - subject: "x"
+            ga: "1/2/3"
+            dpt: "14.056"
+            payload_path: "$.power"
+            bogus_key: true
+        """,
+    )
+    with pytest.raises(jsonschema.ValidationError):
+        WriterRules.load(path)
+
+
 def test_rejects_negative_min_delta(tmp_path: Path) -> None:
     path = _write(
         tmp_path,

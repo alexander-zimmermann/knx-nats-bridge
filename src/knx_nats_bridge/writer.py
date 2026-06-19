@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -10,6 +12,10 @@ from typing import Any
 from nats.aio.client import Client as NatsClient
 from nats.aio.msg import Msg
 from nats.aio.subscription import Subscription
+from nats.errors import TimeoutError as NATSTimeoutError
+from nats.js import JetStreamContext
+from nats.js.api import ConsumerConfig, DeliverPolicy
+from nats.js.errors import NotFoundError
 from xknx import XKNX
 from xknx.dpt import DPTArray, DPTBase, DPTBinary
 from xknx.telegram import Telegram
@@ -21,6 +27,10 @@ from .metrics import Metrics
 from .writer_rules import WriterRule, WriterRules, extract_value
 
 logger = logging.getLogger(__name__)
+
+# Per-subject timeout when seeding the responder cache from JetStream at startup.
+# Short so a cold/missing stream doesn't stall "bridge is up"; seeds run in parallel.
+_SEED_FETCH_TIMEOUT_SECONDS = 2.0
 
 
 class Writer:
@@ -36,6 +46,7 @@ class Writer:
         self._xknx = xknx
         self._metrics = metrics
         self._nc: NatsClient | None = None
+        self._js: JetStreamContext | None = None
         self._subs: list[Subscription] = []
         # Last value written per GA, for the deadband filter (_should_write).
         # Empty on start so every GA gets one fresh write after a restart.
@@ -72,6 +83,7 @@ class Writer:
             reconnected_cb=self._on_reconnect,
         )
         await self._nc.connect(**kwargs)
+        self._js = self._nc.jetstream()
         self._metrics.writer_nats_connected.set(1)
         logger.info(
             "writer connected to NATS: %s (%d subjects, %d rules)",
@@ -79,6 +91,13 @@ class Writer:
             len(self._rules.subjects()),
             len(self._rules),
         )
+
+        # Prime the read-responder cache from JetStream before going live, so reads
+        # right after a restart get answered. Best-effort: never blocks startup.
+        try:
+            await self._seed_last_written()
+        except Exception:
+            logger.exception("seed: unexpected error while seeding responder cache")
 
         for subject in self._rules.subjects():
             sub = await self._nc.subscribe(subject, cb=self._on_message)
@@ -242,6 +261,86 @@ class Writer:
             return
         self._metrics.knx_read_responses.labels(ga=ga, outcome="ok").inc()
         logger.debug("read responder: answered ga=%s value=%r", ga, self._last_written[ga])
+
+    async def _seed_last_written(self) -> None:
+        """Prime the responder cache from JetStream's last value per flagged subject.
+
+        Cache-only: fills ``_last_written`` so a GroupValueRead can be answered right
+        after a restart; it does NOT write to the bus. Subjects are seeded in parallel
+        and every per-subject failure is logged/counted rather than raised.
+        """
+        subjects = self._rules.seed_subjects()
+        if not subjects:
+            return
+        logger.info("seeding read-responder cache from JetStream for %d subjects", len(subjects))
+        await asyncio.gather(*(self._seed_subject(subject) for subject in subjects))
+
+    async def _seed_subject(self, subject: str) -> None:
+        assert self._js is not None
+        try:
+            sub = await self._js.pull_subscribe(
+                subject,
+                config=ConsumerConfig(deliver_policy=DeliverPolicy.LAST_PER_SUBJECT),
+            )
+        except NotFoundError:
+            # No JetStream stream covers this subject — nothing to seed from.
+            self._metrics.knx_seed.labels(subject=subject, outcome="no_stream").inc()
+            logger.warning("seed: no JetStream stream for subject %s", subject)
+            return
+        except Exception:
+            self._metrics.knx_seed.labels(subject=subject, outcome="error").inc()
+            logger.exception("seed: cannot create consumer for subject %s", subject)
+            return
+
+        try:
+            msgs = await sub.fetch(1, timeout=_SEED_FETCH_TIMEOUT_SECONDS)
+        except NATSTimeoutError:
+            # Stream exists but holds no message for this subject yet.
+            self._metrics.knx_seed.labels(subject=subject, outcome="no_message").inc()
+            logger.debug("seed: no message for subject %s yet", subject)
+            return
+        except Exception:
+            self._metrics.knx_seed.labels(subject=subject, outcome="error").inc()
+            logger.exception("seed: fetch failed for subject %s", subject)
+            return
+        finally:
+            with contextlib.suppress(Exception):
+                await sub.unsubscribe()
+
+        if not msgs:
+            self._metrics.knx_seed.labels(subject=subject, outcome="no_message").inc()
+            return
+        msg = msgs[0]
+        with contextlib.suppress(Exception):
+            await msg.ack()
+        self._apply_seed(subject, msg.data)
+
+    def _apply_seed(self, subject: str, data: bytes) -> None:
+        try:
+            payload = json.loads(data) if data else {}
+        except json.JSONDecodeError:
+            self._metrics.knx_seed.labels(subject=subject, outcome="error").inc()
+            logger.warning("seed: non-JSON last message on %s", subject)
+            return
+        for rule in self._rules.for_subject(subject):
+            if not rule.seed_on_start:
+                continue
+            try:
+                value = extract_value(payload, rule.payload_path)
+                # Validate it encodes for this DPT; the responder encodes on demand.
+                _encode_for_dpt(value, rule.dpt)
+            except Exception:
+                self._metrics.knx_seed.labels(subject=subject, outcome="error").inc()
+                logger.warning(
+                    "seed: cannot extract/encode %s for ga=%s (subject=%s)",
+                    rule.payload_path,
+                    rule.ga,
+                    subject,
+                )
+                continue
+            self._last_written[rule.ga] = value
+            self._metrics.knx_seed.labels(subject=subject, outcome="ok").inc()
+            logger.debug("seed: ga=%s value=%r from %s", rule.ga, value, subject)
 
     def _should_write(self, rule: WriterRule, new: Any) -> bool:
         """Deadband: decide whether `new` differs enough from the last write.
