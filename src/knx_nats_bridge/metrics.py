@@ -121,6 +121,18 @@ class Metrics:
             registry=self.registry,
         )
 
+        # Startup seed (JetStream -> writer cache). Primes the read responder
+        # for event-driven subjects whose value wouldn't otherwise arrive again
+        # until the next change. outcome: ok | no_message (empty stream) |
+        # no_stream (subject not JetStream-backed) | error (decode/encode).
+        self.knx_seed = Counter(
+            "knx_seed_total",
+            "Read-responder cache entries seeded from JetStream at startup "
+            "(outcome: ok | no_message | no_stream | error)",
+            ["subject", "outcome"],
+            registry=self.registry,
+        )
+
 
 async def serve(
     metrics: Metrics,

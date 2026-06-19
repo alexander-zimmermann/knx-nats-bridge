@@ -16,7 +16,8 @@
           "payload_path":  { "type": "string", "pattern": "^\\$(\\.[A-Za-z_][A-Za-z0-9_]*)*$" },
           "description":   { "type": "string" },
           "min_delta":     { "type": "number", "minimum": 0 },
-          "min_delta_pct": { "type": "number", "minimum": 0 }
+          "min_delta_pct": { "type": "number", "minimum": 0 },
+          "seed_on_start": { "type": "boolean" }
         },
         "required": ["subject", "ga", "dpt", "payload_path"],
         "additionalProperties": false
