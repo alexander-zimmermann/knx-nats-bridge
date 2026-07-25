@@ -352,7 +352,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16.0" },
     { name = "types-jsonschema", marker = "extra == 'dev'" },
     { name = "types-pyyaml", marker = "extra == 'dev'" },
-    { name = "xknx", specifier = ">=3.16.0" },
+    { name = "xknx", specifier = ">=3.17.0" },
     { name = "xknxproject", marker = "extra == 'tools'", specifier = ">=3.9.0" },
 ]
 provides-extras = ["tools", "import", "dev"]
@@ -985,15 +985,15 @@ wheels = [
 
 [[package]]
 name = "xknx"
-version = "3.16.0"
+version = "3.17.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
     { name = "ifaddr" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c2/f6/6dd769c4d3cc46725d58a04168bbbfb815e147e6b723cff2819011d6e302/xknx-3.16.0.tar.gz", hash = "sha256:3928a095e923f021f2a86b024c8ff0f7c96cbc3db46a56c89af0c4d5d2bbc334", size = 165612, upload-time = "2026-06-19T20:08:11.531Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1a/12/ff3a8aae74b726a04b33ad3ce489fefd309325b3e9e18640cd4fe851af82/xknx-3.17.0.tar.gz", hash = "sha256:21a8806358dd848980804b8dd7d9f78e88c09939421386180ea642e2e9bfbebc", size = 184159, upload-time = "2026-07-25T21:18:31.28Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/74/33/54221717448998254d8b1bb3384bfcf9cc12c7e0dae1dbc343a69492b064/xknx-3.16.0-py3-none-any.whl", hash = "sha256:11ef6be0130d83b155637d9120c39b33c69ba4d4c6d0408fdfbf105278b2edfa", size = 247641, upload-time = "2026-06-19T20:08:09.984Z" },
+    { url = "https://files.pythonhosted.org/packages/cc/4c/b4c9979638ab283766fe2d877e10c3ded5bf22124039e849beeaba43daa1/xknx-3.17.0-py3-none-any.whl", hash = "sha256:32d9264e7d07f37e3c56f4bdf67976208921310278cf9d676b5c4e8169a2e5b2", size = 273240, upload-time = "2026-07-25T21:18:30.13Z" },
 ]
 
 [[package]]
