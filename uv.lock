@@ -352,7 +352,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16.0" },
     { name = "types-jsonschema", marker = "extra == 'dev'" },
     { name = "types-pyyaml", marker = "extra == 'dev'" },
-    { name = "xknx", specifier = ">=3.16.0" },
+    { name = "xknx", specifier = ">=3.17.0" },
     { name = "xknxproject", marker = "extra == 'tools'", specifier = ">=3.9.0" },
 ]
 provides-extras = ["tools", "import", "dev"]
