@@ -16,7 +16,7 @@ classifiers = [
     "Topic :: Home Automation",
 ]
 dependencies = [
-    "xknx>=3.17.0",
+    "xknx>=3.18.0",
     "nats-py[nkeys]>=2.15.0",
     "prometheus-client>=0.26.0",
     "pydantic>=2.13.4",
@@ -27,7 +27,7 @@ dependencies = [
 
 [project.optional-dependencies]
 tools = [
-    "xknxproject>=3.9.0",
+    "xknxproject>=3.10.0",
 ]
 # Only the import-catalog CLI (Kubernetes Job) talks to TimescaleDB; keep
 # psycopg out of plain `pip install knx-nats-bridge`. The container image
