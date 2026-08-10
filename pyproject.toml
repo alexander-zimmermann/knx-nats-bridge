@@ -16,7 +16,7 @@ classifiers = [
     "Topic :: Home Automation",
 ]
 dependencies = [
-    "xknx>=3.18.0",
+    "xknx>=3.19.0",
     "nats-py[nkeys]>=2.15.0",
     "prometheus-client>=0.26.0",
     "pydantic>=2.13.4",
@@ -41,7 +41,7 @@ dev = [
     "pytest-cov>=7.1.0",
     "ruff>=0.16.2",
     "mypy>=2.3.0",
-    "pre-commit>=4.6.1",
+    "pre-commit>=4.6.2",
     "types-PyYAML",
     "types-jsonschema",
 ]
