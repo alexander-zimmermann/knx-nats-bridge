@@ -393,7 +393,7 @@ requires-dist = [
     { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=2.3.0" },
     { name = "nats-py", extras = ["nkeys"], specifier = ">=2.15.0" },
-    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.6.1" },
+    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.6.2" },
     { name = "prometheus-client", specifier = ">=0.26.0" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'import'", specifier = ">=3.3.4" },
     { name = "pydantic", specifier = ">=2.13.4" },
@@ -405,7 +405,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16.2" },
     { name = "types-jsonschema", marker = "extra == 'dev'" },
     { name = "types-pyyaml", marker = "extra == 'dev'" },
-    { name = "xknx", specifier = ">=3.18.0" },
+    { name = "xknx", specifier = ">=3.19.0" },
     { name = "xknxproject", marker = "extra == 'tools'", specifier = ">=3.10.0" },
 ]
 provides-extras = ["tools", "import", "dev"]
@@ -590,7 +590,7 @@ wheels = [
 
 [[package]]
 name = "pre-commit"
-version = "4.6.1"
+version = "4.6.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cfgv" },
@@ -599,9 +599,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "virtualenv" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/25/3a/ddb78f32a0814e66b18a099377a106a2dcdce92d86a034d69d65df9b256e/pre_commit-4.6.1.tar.gz", hash = "sha256:03e809865c7d178b9979d06c761fcbfe6808fdaded8581a745bb110e52050421", size = 198646, upload-time = "2026-07-21T20:56:58.225Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/74/89/1f3e8e1fc3e97de0fa963495832f581f025f29471602a309e48808244292/pre_commit-4.6.2.tar.gz", hash = "sha256:8f5d7bfb021ecdbcd9d49d89847082dd24172ccde534390081a679ad046e2441", size = 198670, upload-time = "2026-08-10T22:07:18.421Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fb/49/bc925106abcdac498074f2cbe6137e94e09f418dd2b7775df5b577dc0313/pre_commit-4.6.1-py2.py3-none-any.whl", hash = "sha256:0e3b2942510d1fb34eec167a3ec57331bf8442122f1153a9fb8b58f5c49b2717", size = 226186, upload-time = "2026-07-21T20:56:57.064Z" },
+    { url = "https://files.pythonhosted.org/packages/45/e2/bbb7129c9e7999a6b8ee9cca3b66486c25c423ab5a75f34071798b74ce94/pre_commit-4.6.2-py2.py3-none-any.whl", hash = "sha256:e2dde9a75d3bce11bd3831c26d134df00a2803c1d818be6a0383c3dcda25dc4e", size = 226202, upload-time = "2026-08-10T22:07:16.942Z" },
 ]
 
 [[package]]
@@ -1072,15 +1072,15 @@ wheels = [
 
 [[package]]
 name = "xknx"
-version = "3.18.0"
+version = "3.19.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
     { name = "ifaddr" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/21/bc/f80479543890e2b83a8d32c31af3899adcbe9143c2deccfdcf8d7dfb3af0/xknx-3.18.0.tar.gz", hash = "sha256:bbca50110fd32e28274bee998462c1e7e992260d7489b957b85af10f15e5991d", size = 190189, upload-time = "2026-08-02T14:11:20.328Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c9/db/59886e46d03b2ca4cfb5129624c93f933697c4ddf59a2c90f7faca1f9074/xknx-3.19.0.tar.gz", hash = "sha256:ab6d50c8313f46897575a4c343bdbbd47460d699489aeda7b9e732e161508108", size = 191421, upload-time = "2026-08-10T08:32:11.767Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8f/db/044894d64f0726bcf35555110235ba1927c5d4cb9b707600f4483a3e20f0/xknx-3.18.0-py3-none-any.whl", hash = "sha256:98841b34ab28d2f688d6906f5d994b2f3c36b1807204d662e278f7fbd322b54c", size = 280395, upload-time = "2026-08-02T14:11:18.916Z" },
+    { url = "https://files.pythonhosted.org/packages/d6/59/43ace5a2e2dccc3e429617c634fb226d2fc5fb6329bcaac89695df0ef7a6/xknx-3.19.0-py3-none-any.whl", hash = "sha256:3c2700ad8b7f3694510a7383f688b0e292d11f549a05ff63a1be7954961243b4", size = 281490, upload-time = "2026-08-10T08:32:10.499Z" },
 ]
 
 [[package]]
