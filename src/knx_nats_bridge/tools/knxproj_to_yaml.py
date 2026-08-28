@@ -143,7 +143,9 @@ def _ignored_co_ids(
     case is a placeholder device carrying objects purely so a group address
     enters a line coupler's filter table — its Write flag says the telegram is
     forwarded, not that anything responds to it. Matching is a case-insensitive
-    substring test against the device's manufacturer and hardware name.
+    substring test against the device's name, manufacturer and hardware name,
+    so a pattern can target either a product ("Dummy") or one specific device
+    ("Basalte Core S4") when several share a product.
     """
     if not patterns:
         return frozenset()
@@ -157,7 +159,7 @@ def _ignored_co_ids(
         if not isinstance(device, dict):
             continue
         label = " ".join(
-            str(device.get(k) or "") for k in ("manufacturer_name", "hardware_name")
+            str(device.get(k) or "") for k in ("name", "manufacturer_name", "hardware_name")
         ).lower()
         if any(p in label for p in lowered):
             ignored.add(str(co_id))
@@ -289,7 +291,8 @@ def main(argv: list[str] | None = None) -> int:
         metavar="SUBSTRING",
         help=(
             "Device whose Write flag must not mark a group address writable, "
-            "matched case-insensitively against manufacturer and hardware name. "
+            "matched case-insensitively against device name, manufacturer and "
+            "hardware name. "
             "Repeatable. Use for placeholder devices that exist only to get a "
             "group address into a line coupler's filter table."
         ),
