@@ -112,18 +112,26 @@ state-projector for Redis keying by function).
 ### `writable`
 
 True when a communication object linked to the group address carries the ETS
-Write flag — meaning something on the bus *receives* this address. It is
-derived from the ETS project, so it says nothing about actuators reached over
-other transports: an address whose only consumer is a NATS-side bridge shows
-up as writable only if a dummy object exists for it in ETS.
+Write flag — meaning something on the bus *receives* this address.
 
-**It is not a permission.** Filter-table dummy objects and visualisation
-devices also receive addresses, so `writable: true` does not imply that a
-write has a useful effect — a status address the bridge itself publishes can
-carry the flag too. Treat it as a necessary condition that removes pure
-sensors and send-only objects from consideration; any consumer gating real
-writes must combine it with its own knowledge of which addresses are command
-inputs.
+**Placeholder devices need excluding.** Installations commonly carry a device
+whose objects exist only so a group address enters a line coupler's filter
+table. Its Write flag means "the telegram is forwarded", not "something acts
+on it", and because such a device typically receives *every* forwarded
+address it drowns the signal. Pass `--ignore-write-from` (repeatable,
+case-insensitive substring against manufacturer and hardware name) to drop
+it. On a real 2559-address project this moved the writable count from 2237
+to 1069 and removed every false positive on known status addresses.
+
+Run with `-v` first: the debug output reports which devices supplied the
+Write flag and how often, which is how you identify the placeholder.
+
+**It is not a permission.** Even excluded properly, `writable: true` only says
+a KNX device receives the address. Actuators reached over other transports —
+a NATS-side bridge republishing to an appliance — have no ETS object at all
+and come out `false`. Treat it as a necessary condition that removes pure
+sensors and send-only objects; any consumer gating real writes must combine
+it with its own knowledge of which addresses are command inputs.
 
 The field is optional in the schema, so catalogs generated before it was
 added stay valid. Absent means "unknown", and consumers should treat that as

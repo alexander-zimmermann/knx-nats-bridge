@@ -31,8 +31,9 @@ def _project_data() -> dict[str, Any]:
                 "dpt": {"main": 9, "sub": 1},
                 "description": "",
                 "comment": "Bedroom temperature sensor",
-                # Sensor output: send-only.
-                "communication_object_ids": ["co-sensor"],
+                # Sensor output: send-only, but a filter-table placeholder
+                # also receives it — which must not make it writable.
+                "communication_object_ids": ["co-sensor", "co-placeholder"],
             },
             "0/3/0": {
                 # No Function reference -> stays in output without room/function.
@@ -72,6 +73,17 @@ def _project_data() -> dict[str, Any]:
                     "read_on_init": False,
                 },
             },
+            "co-placeholder": {
+                "device_address": "1.1.9",
+                "flags": {
+                    "read": False,
+                    "write": True,
+                    "communication": True,
+                    "transmit": False,
+                    "update": False,
+                    "read_on_init": False,
+                },
+            },
             "co-sensor": {
                 "device_address": "1.1.2",
                 "flags": {
@@ -87,6 +99,7 @@ def _project_data() -> dict[str, Any]:
         "devices": {
             "1.1.1": {"manufacturer_name": "ACME", "hardware_name": "Switch Actuator"},
             "1.1.2": {"manufacturer_name": "ACME", "hardware_name": "Temp Sensor"},
+            "1.1.9": {"manufacturer_name": "GIRA Giersiepen", "hardware_name": "Dummy"},
         },
         "spaces": {
             "building-1": {
@@ -144,7 +157,8 @@ def test_extract_room_from_function_space_id() -> None:
     assert mapping["0/2/10"] == {
         "name": "Sensors.1F.Bedroom.Temperature",
         "dpt": "9.001",
-        "writable": False,
+        # A placeholder device receives it, so the naive rule says writable.
+        "writable": True,
         "room": "Bedroom",
         "function": "Climate Bedroom",
         "description": "Bedroom temperature sensor",
@@ -223,8 +237,12 @@ def test_writable_provenance_names_the_supplying_device() -> None:
 
     provenance = _writable_provenance(mapping, data)
 
-    # 0/1/40 and 0/5/0 both got their write flag from the same actuator.
-    assert provenance == [("1.1.1 (ACME Switch Actuator)", 2)]
+    # 0/1/40 and 0/5/0 got theirs from the actuator, 0/2/10 from the
+    # placeholder — which is exactly what makes the placeholder visible.
+    assert provenance == [
+        ("1.1.1 (ACME Switch Actuator)", 2),
+        ("1.1.9 (GIRA Giersiepen Dummy)", 1),
+    ]
 
 
 def test_build_space_id_to_name_indexes_by_key_and_identifier() -> None:
@@ -277,3 +295,36 @@ def test_build_ga_to_function_handles_missing_space_id() -> None:
     }
     result = _build_ga_to_function(functions, {})
     assert result["1/2/3"] == {"name": "Standalone", "room": None}
+
+
+def test_ignore_write_from_excludes_placeholder_devices() -> None:
+    """A device that receives without acting must not mark a GA writable."""
+    mapping: dict[str, Any] = {}
+    _extract(mapping, _project_data(), ignore_write_from=["dummy"])
+
+    # Sensor GA: only the placeholder received it -> no longer writable.
+    assert mapping["0/2/10"]["writable"] is False
+    # Real actuator still counts.
+    assert mapping["0/1/40"]["writable"] is True
+
+
+def test_ignore_write_from_matches_case_insensitively_on_manufacturer() -> None:
+    mapping: dict[str, Any] = {}
+    _extract(mapping, _project_data(), ignore_write_from=["GIRA GIERSIEPEN"])
+    assert mapping["0/2/10"]["writable"] is False
+
+
+def test_ignore_write_from_ignores_unrelated_patterns() -> None:
+    mapping: dict[str, Any] = {}
+    _extract(mapping, _project_data(), ignore_write_from=["no-such-device"])
+    assert mapping["0/2/10"]["writable"] is True
+
+
+def test_writable_provenance_honours_the_exclusion() -> None:
+    mapping: dict[str, Any] = {}
+    data = _project_data()
+    _extract(mapping, data, ignore_write_from=["dummy"])
+
+    provenance = _writable_provenance(mapping, data, ignore_write_from=["dummy"])
+
+    assert provenance == [("1.1.1 (ACME Switch Actuator)", 2)]

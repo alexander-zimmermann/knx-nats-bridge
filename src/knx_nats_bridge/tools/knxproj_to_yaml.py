@@ -17,7 +17,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from collections.abc import Mapping
+from collections.abc import Container, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -40,7 +40,11 @@ def _load_project(path: Path, password: str | None) -> dict[str, Any]:
     return project.parse()
 
 
-def _extract(mapping: dict[str, Any], project_data: dict[str, Any]) -> None:
+def _extract(
+    mapping: dict[str, Any],
+    project_data: dict[str, Any],
+    ignore_write_from: Sequence[str] = (),
+) -> None:
     """Build the raw catalog entries straight from xknxproject's parse output.
 
     Output is intentionally minimal and project-agnostic: only what ETS
@@ -56,16 +60,20 @@ def _extract(mapping: dict[str, Any], project_data: dict[str, Any]) -> None:
       * ``description``  — ETS description / comment, if non-empty
       * ``writable``     — True when a linked communication object carries the
                             ETS Write flag, i.e. something on the bus *receives*
-                            this address. Necessary but not sufficient for "a
-                            write has an effect": filter-table dummy objects and
-                            visualisation devices also receive, so a consumer
-                            that gates writes must combine this with its own
-                            knowledge of which addresses are command inputs.
+                            this address. Pass ``ignore_write_from`` to drop
+                            devices that receive without acting (filter-table
+                            placeholders). Still only a necessary condition:
+                            actuators reached over other transports have no ETS
+                            object at all, so a consumer that gates writes must
+                            combine this with its own knowledge of which
+                            addresses are command inputs.
     """
     group_addresses = project_data.get("group_addresses", {}) or {}
     spaces = project_data.get("spaces") or project_data.get("locations") or {}
     functions = project_data.get("functions", {}) or {}
     comm_objects = project_data.get("communication_objects", {}) or {}
+    devices = project_data.get("devices", {}) or {}
+    ignored = _ignored_co_ids(comm_objects, devices, ignore_write_from)
 
     space_id_to_name = _build_space_id_to_name(spaces)
     ga_to_function = _build_ga_to_function(functions, space_id_to_name)
@@ -84,7 +92,9 @@ def _extract(mapping: dict[str, Any], project_data: dict[str, Any]) -> None:
             # Always emitted, unlike the optional fields below: `false` is a
             # positive statement from ETS, not absent data. An absent key then
             # means exactly one thing — the catalog predates this field.
-            "writable": _is_writable(ga_info.get("communication_object_ids"), comm_objects),
+            "writable": _is_writable(
+                ga_info.get("communication_object_ids"), comm_objects, ignored
+            ),
         }
 
         fn = ga_to_function.get(str(ga_str))
@@ -100,17 +110,58 @@ def _extract(mapping: dict[str, Any], project_data: dict[str, Any]) -> None:
         mapping[str(ga_str)] = entry
 
 
-def _is_writable(co_ids: Any, communication_objects: Mapping[str, Any]) -> bool:
+def _is_writable(
+    co_ids: Any,
+    communication_objects: Mapping[str, Any],
+    ignored_co_ids: Container[str] = frozenset(),
+) -> bool:
     """True when any communication object linked to the GA has the Write flag.
 
     A GA with no linked objects — or whose objects are all send-only — is not
     writable. Dangling ids (listed on the GA but missing from the project's
     communication objects, which happens when a device's application program
     was never loaded) resolve to None and count as not writable.
+
+    Objects in ``ignored_co_ids`` do not vote; see ``_ignored_co_ids``.
     """
     if not isinstance(co_ids, list):
         return False
-    return any(_has_write_flag(communication_objects.get(str(co_id))) for co_id in co_ids)
+    return any(
+        str(co_id) not in ignored_co_ids and _has_write_flag(communication_objects.get(str(co_id)))
+        for co_id in co_ids
+    )
+
+
+def _ignored_co_ids(
+    communication_objects: Mapping[str, Any],
+    devices: Mapping[str, Any],
+    patterns: Sequence[str],
+) -> frozenset[str]:
+    """Communication objects whose Write flag should not count as an actuator.
+
+    Some devices receive group addresses without acting on them. The common
+    case is a placeholder device carrying objects purely so a group address
+    enters a line coupler's filter table — its Write flag says the telegram is
+    forwarded, not that anything responds to it. Matching is a case-insensitive
+    substring test against the device's manufacturer and hardware name.
+    """
+    if not patterns:
+        return frozenset()
+
+    lowered = [p.lower() for p in patterns]
+    ignored: set[str] = set()
+    for co_id, co in communication_objects.items():
+        if not isinstance(co, dict):
+            continue
+        device = devices.get(str(co.get("device_address")))
+        if not isinstance(device, dict):
+            continue
+        label = " ".join(
+            str(device.get(k) or "") for k in ("manufacturer_name", "hardware_name")
+        ).lower()
+        if any(p in label for p in lowered):
+            ignored.add(str(co_id))
+    return frozenset(ignored)
 
 
 def _has_write_flag(co: Any) -> bool:
@@ -121,6 +172,7 @@ def _has_write_flag(co: Any) -> bool:
 def _writable_provenance(
     mapping: Mapping[str, Any],
     project_data: Mapping[str, Any],
+    ignore_write_from: Sequence[str] = (),
 ) -> list[tuple[str, int]]:
     """Count, per device, how often it supplied the Write flag.
 
@@ -131,6 +183,7 @@ def _writable_provenance(
     group_addresses = project_data.get("group_addresses", {}) or {}
     comm_objects = project_data.get("communication_objects", {}) or {}
     devices = project_data.get("devices", {}) or {}
+    ignored = _ignored_co_ids(comm_objects, devices, ignore_write_from)
 
     counts: dict[str, int] = {}
     for ga_str, entry in mapping.items():
@@ -139,6 +192,8 @@ def _writable_provenance(
         ga_info = group_addresses.get(ga_str)
         co_ids = ga_info.get("communication_object_ids") if isinstance(ga_info, dict) else None
         for co_id in co_ids if isinstance(co_ids, list) else []:
+            if str(co_id) in ignored:
+                continue
             co = comm_objects.get(str(co_id))
             if not _has_write_flag(co):
                 continue
@@ -227,6 +282,18 @@ def main(argv: list[str] | None = None) -> int:
         "--output", "-o", required=True, type=Path, help="Path to ga-catalog.yaml output"
     )
     parser.add_argument("--password", default=None, help="ETS project password (if encrypted)")
+    parser.add_argument(
+        "--ignore-write-from",
+        action="append",
+        default=[],
+        metavar="SUBSTRING",
+        help=(
+            "Device whose Write flag must not mark a group address writable, "
+            "matched case-insensitively against manufacturer and hardware name. "
+            "Repeatable. Use for placeholder devices that exist only to get a "
+            "group address into a line coupler's filter table."
+        ),
+    )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)
 
@@ -239,7 +306,7 @@ def main(argv: list[str] | None = None) -> int:
     project_data = _load_project(args.input, args.password)
 
     mapping: dict[str, Any] = {}
-    _extract(mapping, project_data)
+    _extract(mapping, project_data, args.ignore_write_from)
     if not mapping:
         logger.error("no group addresses with DPT information found in %s", args.input)
         return 2
@@ -264,7 +331,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if logger.isEnabledFor(logging.DEBUG):
-        for label, count in _writable_provenance(mapping, project_data):
+        for label, count in _writable_provenance(mapping, project_data, args.ignore_write_from):
             logger.debug("write flag supplied by %s on %d group addresses", label, count)
     return 0
 
