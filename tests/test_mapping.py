@@ -62,6 +62,23 @@ def test_loads_full_metadata(tmp_path: Path) -> None:
     assert entry.description == "Switch ceiling light"
 
 
+def test_loads_writable_flag(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+        "1/2/3": { name: "Setpoint", dpt: "9.001", writable: true }
+        "1/2/4": { name: "Reading",  dpt: "9.001", writable: false }
+        "1/2/5": { name: "Legacy",   dpt: "9.001" }
+        """,
+    )
+    mapping = GroupAddressMapping.load(path)
+
+    assert mapping.get("1/2/3").writable is True  # type: ignore[union-attr]
+    assert mapping.get("1/2/4").writable is False  # type: ignore[union-attr]
+    # Catalogs predating the field default to not writable.
+    assert mapping.get("1/2/5").writable is False  # type: ignore[union-attr]
+
+
 def test_rejects_unknown_field(tmp_path: Path) -> None:
     path = _write(
         tmp_path,

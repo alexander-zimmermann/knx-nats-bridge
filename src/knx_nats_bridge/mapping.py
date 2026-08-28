@@ -20,6 +20,9 @@ class GAEntry:
     room: str | None = None
     function: str | None = None
     description: str | None = None
+    # ETS Write flag: something on the bus receives this address. Not a
+    # permission — see the schema description before gating writes on it.
+    writable: bool = False
 
 
 class GroupAddressMapping:
@@ -63,6 +66,9 @@ class GroupAddressMapping:
                 room=entry.get("room"),
                 function=entry.get("function"),
                 description=entry.get("description"),
+                # `is True` on purpose: load() skips validation when the schema
+                # file is absent, so anything but a literal true is not writable.
+                writable=entry.get("writable") is True,
             )
 
         return cls(entries)

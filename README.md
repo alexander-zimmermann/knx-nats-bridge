@@ -78,8 +78,9 @@ Auth precedence: `NATS_CREDS_FILE` > `NATS_NKEY_SEED_FILE` > `NATS_USER` + `NATS
 ## GA catalog format
 
 YAML file keyed by group address (`<main>/<middle>/<sub>`). Each entry has
-two required fields (`name`, `dpt`) and three optional ones extracted from
-ETS (`room`, `function`, `description`). Validated against
+two required fields (`name`, `dpt`), a `writable` flag, and three optional
+fields extracted from ETS (`room`, `function`, `description`). Validated
+against
 [src/knx_nats_bridge/\_schemas/ga-catalog.schema.json](src/knx_nats_bridge/_schemas/ga-catalog.schema.json)
 at startup.
 
@@ -88,22 +89,53 @@ at startup.
 "1/2/3":
   name: "Beleuchtung.OG.Schlafzimmer.Decke.Schalten"
   dpt: "1.001"
+  writable: true
   room: "Schlafzimmer"
   function: "Beleuchtung"
   description: "Deckenleuchte schalten"
 "2/1/5":
   name: "Sensorik.OG.Schlafzimmer.Temperatur"
   dpt: "9.001"
+  writable: false
   room: "Schlafzimmer"
   function: "Sensorik"
 "3/2/7":
   name: "Versorgungstechnik.KG.Heizung.Energiezähler"
   dpt: "13.013"
+  writable: false
 ```
 
 The bridge itself only uses `name` and `dpt`; the optional fields are
 consumed by downstream services (iot-mcp-bridge for SQL joins by room,
 state-projector for Redis keying by function).
+
+### `writable`
+
+True when a communication object linked to the group address carries the ETS
+Write flag — meaning something on the bus *receives* this address.
+
+**Placeholder devices need excluding.** Installations commonly carry a device
+whose objects exist only so a group address enters a line coupler's filter
+table. Its Write flag means "the telegram is forwarded", not "something acts
+on it", and because such a device typically receives *every* forwarded
+address it drowns the signal. Pass `--ignore-write-from` (repeatable,
+case-insensitive substring against manufacturer and hardware name) to drop
+it. On a real 2559-address project this moved the writable count from 2237
+to 1069 and removed every false positive on known status addresses.
+
+Run with `-v` first: the debug output reports which devices supplied the
+Write flag and how often, which is how you identify the placeholder.
+
+**It is not a permission.** Even excluded properly, `writable: true` only says
+a KNX device receives the address. Actuators reached over other transports —
+a NATS-side bridge republishing to an appliance — have no ETS object at all
+and come out `false`. Treat it as a necessary condition that removes pure
+sensors and send-only objects; any consumer gating real writes must combine
+it with its own knowledge of which addresses are command inputs.
+
+The field is optional in the schema, so catalogs generated before it was
+added stay valid. Absent means "unknown", and consumers should treat that as
+not writable.
 
 Use `knxproj-to-yaml` (requires the `[tools]` extra: `pip install
 "knx-nats-bridge[tools]"`) to generate the catalog from an ETS `.knxproj`
