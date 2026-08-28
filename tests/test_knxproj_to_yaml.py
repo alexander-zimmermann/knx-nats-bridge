@@ -99,7 +99,11 @@ def _project_data() -> dict[str, Any]:
         "devices": {
             "1.1.1": {"manufacturer_name": "ACME", "hardware_name": "Switch Actuator"},
             "1.1.2": {"manufacturer_name": "ACME", "hardware_name": "Temp Sensor"},
-            "1.1.9": {"manufacturer_name": "GIRA Giersiepen", "hardware_name": "Dummy"},
+            "1.1.9": {
+                "name": "Visualisation placeholder",
+                "manufacturer_name": "GIRA Giersiepen",
+                "hardware_name": "Dummy",
+            },
         },
         "spaces": {
             "building-1": {
@@ -328,3 +332,10 @@ def test_writable_provenance_honours_the_exclusion() -> None:
     provenance = _writable_provenance(mapping, data, ignore_write_from=["dummy"])
 
     assert provenance == [("1.1.1 (ACME Switch Actuator)", 2)]
+
+
+def test_ignore_write_from_matches_the_device_name() -> None:
+    """Several placeholders can share a product, so target one by its name."""
+    mapping: dict[str, Any] = {}
+    _extract(mapping, _project_data(), ignore_write_from=["visualisation placeholder"])
+    assert mapping["0/2/10"]["writable"] is False
