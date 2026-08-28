@@ -8,6 +8,9 @@ from knx_nats_bridge.tools.knxproj_to_yaml import (
     _build_ga_to_function,
     _build_space_id_to_name,
     _extract,
+    _has_write_flag,
+    _is_writable,
+    _writable_provenance,
 )
 
 
@@ -20,12 +23,16 @@ def _project_data() -> dict[str, Any]:
                 "dpt": {"main": 1, "sub": 1},
                 "description": "Switch ceiling light",
                 "comment": "",
+                # Actuator input: carries the Write flag.
+                "communication_object_ids": ["co-actuator"],
             },
             "0/2/10": {
                 "name": "Sensors.1F.Bedroom.Temperature",
                 "dpt": {"main": 9, "sub": 1},
                 "description": "",
                 "comment": "Bedroom temperature sensor",
+                # Sensor output: send-only.
+                "communication_object_ids": ["co-sensor"],
             },
             "0/3/0": {
                 # No Function reference -> stays in output without room/function.
@@ -33,12 +40,53 @@ def _project_data() -> dict[str, Any]:
                 "dpt": {"main": 17, "sub": 1},
                 "description": "",
                 "comment": "",
+                "communication_object_ids": [],
             },
             "0/4/0": {
                 # Missing DPT — should be dropped.
                 "name": "Broken.Entry",
                 "dpt": None,
             },
+            "0/5/0": {
+                # Several objects, only one of which receives.
+                "name": "Mixed.Entry",
+                "dpt": {"main": 1, "sub": 1},
+                "communication_object_ids": ["co-sensor", "co-actuator"],
+            },
+            "0/5/1": {
+                # Dangling reference: application program never loaded.
+                "name": "Dangling.Entry",
+                "dpt": {"main": 1, "sub": 1},
+                "communication_object_ids": ["co-does-not-exist"],
+            },
+        },
+        "communication_objects": {
+            "co-actuator": {
+                "device_address": "1.1.1",
+                "flags": {
+                    "read": False,
+                    "write": True,
+                    "communication": True,
+                    "transmit": False,
+                    "update": False,
+                    "read_on_init": False,
+                },
+            },
+            "co-sensor": {
+                "device_address": "1.1.2",
+                "flags": {
+                    "read": True,
+                    "write": False,
+                    "communication": True,
+                    "transmit": True,
+                    "update": False,
+                    "read_on_init": False,
+                },
+            },
+        },
+        "devices": {
+            "1.1.1": {"manufacturer_name": "ACME", "hardware_name": "Switch Actuator"},
+            "1.1.2": {"manufacturer_name": "ACME", "hardware_name": "Temp Sensor"},
         },
         "spaces": {
             "building-1": {
@@ -85,6 +133,7 @@ def test_extract_room_from_function_space_id() -> None:
     assert mapping["0/1/40"] == {
         "name": "Lighting.1F.Bedroom.Ceiling.Switch",
         "dpt": "1.001",
+        "writable": True,
         "room": "Bedroom",
         "function": "Lighting Bedroom",
         "description": "Switch ceiling light",
@@ -95,6 +144,7 @@ def test_extract_room_from_function_space_id() -> None:
     assert mapping["0/2/10"] == {
         "name": "Sensors.1F.Bedroom.Temperature",
         "dpt": "9.001",
+        "writable": False,
         "room": "Bedroom",
         "function": "Climate Bedroom",
         "description": "Bedroom temperature sensor",
@@ -105,11 +155,12 @@ def test_extract_emits_minimal_entry_when_no_function() -> None:
     mapping: dict[str, Any] = {}
     _extract(mapping, _project_data())
 
-    # No ETS Function reference -> only name + dpt. No name-parsing fallback;
-    # consumers add room/function via their own enrichment step.
+    # No ETS Function reference -> only the always-present fields. No
+    # name-parsing fallback; consumers add room/function via enrichment.
     assert mapping["0/3/0"] == {
         "name": "General.Central.Scenes",
         "dpt": "17.001",
+        "writable": False,
     }
 
 
@@ -117,6 +168,63 @@ def test_extract_drops_ga_without_dpt() -> None:
     mapping: dict[str, Any] = {}
     _extract(mapping, _project_data())
     assert "0/4/0" not in mapping
+
+
+def test_extract_writable_when_any_linked_object_receives() -> None:
+    mapping: dict[str, Any] = {}
+    _extract(mapping, _project_data())
+    # Send-only object plus a receiving one -> the receiving one decides.
+    assert mapping["0/5/0"]["writable"] is True
+
+
+def test_extract_dangling_communication_object_is_not_writable() -> None:
+    mapping: dict[str, Any] = {}
+    _extract(mapping, _project_data())
+    # Id listed on the GA but absent from the project: no crash, not writable.
+    assert mapping["0/5/1"]["writable"] is False
+
+
+def test_extract_without_communication_objects_section() -> None:
+    data = _project_data()
+    del data["communication_objects"]
+
+    mapping: dict[str, Any] = {}
+    _extract(mapping, data)
+
+    assert mapping  # still extracts everything else
+    assert all(entry["writable"] is False for entry in mapping.values())
+
+
+def test_is_writable_rules() -> None:
+    objects = {
+        "w": {"flags": {"write": True}},
+        "t": {"flags": {"write": False, "transmit": True}},
+    }
+    assert _is_writable(["w"], objects) is True
+    assert _is_writable(["t"], objects) is False
+    assert _is_writable(["t", "w"], objects) is True
+    assert _is_writable([], objects) is False
+    assert _is_writable(None, objects) is False
+    assert _is_writable(["missing"], objects) is False
+
+
+def test_has_write_flag_tolerates_malformed_objects() -> None:
+    assert _has_write_flag(None) is False
+    assert _has_write_flag({}) is False
+    assert _has_write_flag({"flags": None}) is False
+    assert _has_write_flag({"flags": {}}) is False
+    assert _has_write_flag({"flags": {"write": True}}) is True
+
+
+def test_writable_provenance_names_the_supplying_device() -> None:
+    mapping: dict[str, Any] = {}
+    data = _project_data()
+    _extract(mapping, data)
+
+    provenance = _writable_provenance(mapping, data)
+
+    # 0/1/40 and 0/5/0 both got their write flag from the same actuator.
+    assert provenance == [("1.1.1 (ACME Switch Actuator)", 2)]
 
 
 def test_build_space_id_to_name_indexes_by_key_and_identifier() -> None:

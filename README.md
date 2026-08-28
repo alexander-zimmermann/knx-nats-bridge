@@ -78,8 +78,9 @@ Auth precedence: `NATS_CREDS_FILE` > `NATS_NKEY_SEED_FILE` > `NATS_USER` + `NATS
 ## GA catalog format
 
 YAML file keyed by group address (`<main>/<middle>/<sub>`). Each entry has
-two required fields (`name`, `dpt`) and three optional ones extracted from
-ETS (`room`, `function`, `description`). Validated against
+two required fields (`name`, `dpt`), a `writable` flag, and three optional
+fields extracted from ETS (`room`, `function`, `description`). Validated
+against
 [src/knx_nats_bridge/\_schemas/ga-catalog.schema.json](src/knx_nats_bridge/_schemas/ga-catalog.schema.json)
 at startup.
 
@@ -88,22 +89,45 @@ at startup.
 "1/2/3":
   name: "Beleuchtung.OG.Schlafzimmer.Decke.Schalten"
   dpt: "1.001"
+  writable: true
   room: "Schlafzimmer"
   function: "Beleuchtung"
   description: "Deckenleuchte schalten"
 "2/1/5":
   name: "Sensorik.OG.Schlafzimmer.Temperatur"
   dpt: "9.001"
+  writable: false
   room: "Schlafzimmer"
   function: "Sensorik"
 "3/2/7":
   name: "Versorgungstechnik.KG.Heizung.Energiezähler"
   dpt: "13.013"
+  writable: false
 ```
 
 The bridge itself only uses `name` and `dpt`; the optional fields are
 consumed by downstream services (iot-mcp-bridge for SQL joins by room,
 state-projector for Redis keying by function).
+
+### `writable`
+
+True when a communication object linked to the group address carries the ETS
+Write flag — meaning something on the bus *receives* this address. It is
+derived from the ETS project, so it says nothing about actuators reached over
+other transports: an address whose only consumer is a NATS-side bridge shows
+up as writable only if a dummy object exists for it in ETS.
+
+**It is not a permission.** Filter-table dummy objects and visualisation
+devices also receive addresses, so `writable: true` does not imply that a
+write has a useful effect — a status address the bridge itself publishes can
+carry the flag too. Treat it as a necessary condition that removes pure
+sensors and send-only objects from consideration; any consumer gating real
+writes must combine it with its own knowledge of which addresses are command
+inputs.
+
+The field is optional in the schema, so catalogs generated before it was
+added stay valid. Absent means "unknown", and consumers should treat that as
+not writable.
 
 Use `knxproj-to-yaml` (requires the `[tools]` extra: `pip install
 "knx-nats-bridge[tools]"`) to generate the catalog from an ETS `.knxproj`
