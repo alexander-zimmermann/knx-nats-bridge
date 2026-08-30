@@ -7,6 +7,7 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
+from nats_bridge_core import Publisher
 from xknx import XKNX
 from xknx.core import XknxConnectionState
 from xknx.dpt import DPTArray, DPTBase, DPTBinary
@@ -19,7 +20,6 @@ from .config import ConnectionType as CfgConnectionType
 from .config import Settings, UnmappedPolicy
 from .mapping import GAEntry, GroupAddressMapping
 from .metrics import Metrics
-from .publisher import Publisher
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +170,7 @@ class KnxListener:
         # Sync callback context: hand off to the publisher's bounded queue.
         # A single worker drains it, so events publish in bus order and a NATS
         # outage can't pile up unbounded in-flight tasks.
-        self._publisher.enqueue(subject, payload)
+        self._publisher.enqueue(None, subject, payload)
 
 
 def _decode(raw_value: Any, dpt: str) -> Any:

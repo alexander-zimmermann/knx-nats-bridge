@@ -17,6 +17,7 @@ classifiers = [
 ]
 dependencies = [
     "xknx>=3.20.0",
+    "nats-bridge-core @ git+https://github.com/alexander-zimmermann/nats-bridge-core@v0.4.0",
     "nats-py[nkeys]>=2.15.0",
     "prometheus-client>=0.26.0",
     "pydantic>=2.13.5",
@@ -54,6 +55,10 @@ knxproj-to-yaml = "knx_nats_bridge.tools.knxproj_to_yaml:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+# nats-bridge-core is a git tag, not a PyPI release.
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/knx_nats_bridge"]
