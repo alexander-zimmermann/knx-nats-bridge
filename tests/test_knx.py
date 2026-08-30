@@ -19,7 +19,7 @@ class FakePublisher:
     def __init__(self) -> None:
         self.events: list[tuple[str, dict[str, Any]]] = []
 
-    def enqueue(self, subject: str, payload: dict[str, Any]) -> bool:
+    def enqueue(self, _ctx: object, subject: str, payload: dict[str, Any]) -> bool:
         self.events.append((subject, payload))
         return True
 
