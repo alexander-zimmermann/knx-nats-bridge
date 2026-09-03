@@ -10,6 +10,7 @@ from knx_nats_bridge.tools.knxproj_to_yaml import (
     _extract,
     _has_write_flag,
     _is_writable,
+    _strip_space_numbering,
     _writable_provenance,
 )
 
@@ -339,3 +340,96 @@ def test_ignore_write_from_matches_the_device_name() -> None:
     mapping: dict[str, Any] = {}
     _extract(mapping, _project_data(), ignore_write_from=["visualisation placeholder"])
     assert mapping["0/2/10"]["writable"] is False
+
+
+# --- ETS artefacts: Building numbering and pre-filled descriptions ---------
+
+
+def test_strip_space_numbering_handles_both_ets_shapes() -> None:
+    # Room level carries the space id, higher levels do not.
+    assert _strip_space_numbering("3 - Büro (E3)") == "Büro"
+    assert _strip_space_numbering("1 - Gebäude") == "Gebäude"
+    assert _strip_space_numbering("2 - Badezimmer Eltern (O5)") == "Badezimmer Eltern"
+
+
+def test_strip_space_numbering_leaves_plain_names_alone() -> None:
+    assert _strip_space_numbering("Büro") == "Büro"
+    assert _strip_space_numbering("  Gäste WC  ") == "Gäste WC"
+    # A hyphen that is not the numbering separator must survive.
+    assert _strip_space_numbering("Badezimmer-Eltern") == "Badezimmer-Eltern"
+
+
+def test_extract_strips_the_numbering_from_the_room() -> None:
+    data = _project_data()
+    data["spaces"] = {
+        "S1": {"name": "2 - Erdgeschoss (EG)", "spaces": {"S2": {"name": "3 - Büro (E3)"}}}
+    }
+    data["functions"] = {
+        "F1": {"name": "Lighting Büro", "space_id": "S2", "group_addresses": {"0/1/40": {}}}
+    }
+    mapping: dict[str, Any] = {}
+    _extract(mapping, data)
+    assert mapping["0/1/40"]["room"] == "Büro"
+
+
+def test_extract_drops_the_description_ets_pre_fills() -> None:
+    # ETS seeds a Function's description with "<space> <function>", which
+    # repeats what room and function already carry.
+    data = _project_data()
+    data["spaces"] = {"S2": {"name": "3 - Büro (E3)"}}
+    data["functions"] = {
+        "F1": {"name": "Lighting Büro", "space_id": "S2", "group_addresses": {"0/1/40": {}}}
+    }
+    data["group_addresses"]["0/1/40"]["description"] = "3 - Büro (E3) Lighting Büro"
+    mapping: dict[str, Any] = {}
+    _extract(mapping, data)
+    assert "description" not in mapping["0/1/40"]
+
+
+def test_extract_drops_the_boilerplate_in_its_stripped_spelling_too() -> None:
+    data = _project_data()
+    data["spaces"] = {"S2": {"name": "3 - Büro (E3)"}}
+    data["functions"] = {
+        "F1": {"name": "Lighting Büro", "space_id": "S2", "group_addresses": {"0/1/40": {}}}
+    }
+    data["group_addresses"]["0/1/40"]["description"] = "büro   lighting büro"
+    mapping: dict[str, Any] = {}
+    _extract(mapping, data)
+    assert "description" not in mapping["0/1/40"]
+
+
+def test_extract_keeps_a_description_that_says_something() -> None:
+    data = _project_data()
+    data["group_addresses"]["0/1/40"]["description"] = "Dimmer defekt, Ersatz bestellt"
+    mapping: dict[str, Any] = {}
+    _extract(mapping, data)
+    assert mapping["0/1/40"]["description"] == "Dimmer defekt, Ersatz bestellt"
+
+
+def test_extract_drops_boilerplate_whose_numbering_went_stale() -> None:
+    # ETS keeps the number the space had when it seeded the text. Renumbering
+    # the space afterwards leaves a description that no longer matches the
+    # room string character for character — it is still boilerplate.
+    data = _project_data()
+    data["spaces"] = {"S2": {"name": "2 - Terrasse (A2)"}}
+    data["functions"] = {
+        "F1": {"name": "Entertainment", "space_id": "S2", "group_addresses": {"0/1/40": {}}}
+    }
+    data["group_addresses"]["0/1/40"]["description"] = "3 - Terrasse (A3) Entertainment"
+    mapping: dict[str, Any] = {}
+    _extract(mapping, data)
+    assert "description" not in mapping["0/1/40"]
+    assert mapping["0/1/40"]["room"] == "Terrasse"
+
+
+def test_extract_keeps_a_description_that_only_looks_numbered() -> None:
+    data = _project_data()
+    data["spaces"] = {"S2": {"name": "2 - Terrasse (A2)"}}
+    data["functions"] = {
+        "F1": {"name": "Entertainment", "space_id": "S2", "group_addresses": {"0/1/40": {}}}
+    }
+    # Same shape, different room — not this entry's boilerplate.
+    data["group_addresses"]["0/1/40"]["description"] = "3 - Balkon (A3) Entertainment"
+    mapping: dict[str, Any] = {}
+    _extract(mapping, data)
+    assert mapping["0/1/40"]["description"] == "3 - Balkon (A3) Entertainment"

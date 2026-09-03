@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import sys
 from collections.abc import Container, Mapping, Sequence
 from pathlib import Path
@@ -47,17 +48,21 @@ def _extract(
 ) -> None:
     """Build the raw catalog entries straight from xknxproject's parse output.
 
-    Output is intentionally minimal and project-agnostic: only what ETS
-    itself defines. Project-specific enrichment (parsing rooms from naming
-    conventions, normalising space names, etc.) is the consumer's job.
+    Output is minimal and project-agnostic: what ETS defines, minus the two
+    artefacts ETS adds by itself — the Building-tree numbering around a
+    space name and the description it pre-fills from space plus function.
+    Both are presentation, not data; stripping them belongs here, where ETS
+    is read, rather than in every consumer.
 
     For each GA we emit:
       * ``name``         — verbatim from ETS
       * ``dpt``          — ``<main>.<sub>`` formatted; entries without a DPT
                             are dropped
       * ``function``     — ETS Function name, if the GA is referenced by one
-      * ``room``         — Function's space name, if the Function has a space_id
-      * ``description``  — ETS description / comment, if non-empty
+      * ``room``         — Function's space name, if the Function has a
+                            space_id, stripped of ETS' Building numbering
+      * ``description``  — ETS description / comment, unless it is the
+                            boilerplate ETS pre-fills
       * ``writable``     — True when a linked communication object carries the
                             ETS Write flag, i.e. something on the bus *receives*
                             this address. Pass ``ignore_write_from`` to drop
@@ -98,13 +103,19 @@ def _extract(
         }
 
         fn = ga_to_function.get(str(ga_str))
+        raw_room = fn.get("room") if fn else None
         if fn:
             entry["function"] = fn["name"]
-            if fn.get("room"):
-                entry["room"] = fn["room"]
+            if raw_room:
+                entry["room"] = _strip_space_numbering(raw_room)
 
         description = (ga_info.get("description") or ga_info.get("comment") or "").strip()
-        if description:
+        # ETS writes the boilerplate with the *raw* space name, so both
+        # spellings have to be compared against.
+        rooms = [r for r in (raw_room, entry.get("room")) if r]
+        if description and not any(
+            _is_ets_boilerplate(description, room, entry.get("function")) for room in rooms
+        ):
             entry["description"] = description
 
         mapping[str(ga_str)] = entry
@@ -250,6 +261,44 @@ def _build_space_id_to_name(spaces: Mapping[str, Any]) -> dict[str, str]:
 
     _walk(spaces)
     return space_id_to_name
+
+
+# ETS' Building tree numbers its spaces for ordering and appends the space
+# id: `3 - Büro (E3)`. Higher levels carry no id: `1 - Gebäude`. Both are
+# presentation; the name in between is the room.
+_SPACE_NUMBERING_RE = re.compile(r"^\s*\d+\s*-\s*(.+?)\s*(?:\([^)]*\))?\s*$")
+
+
+def _strip_space_numbering(space: str) -> str:
+    """`3 - Büro (E3)` and `1 - Gebäude` -> `Büro` / `Gebäude`. Anything that
+    does not carry the numbering is returned trimmed but untouched."""
+    match = _SPACE_NUMBERING_RE.match(space)
+    return match.group(1).strip() if match else space.strip()
+
+
+def _is_ets_boilerplate(description: str, room: str | None, function: str | None) -> bool:
+    """Whether a description is the text ETS pre-fills a Function with.
+
+    ETS seeds it with the space name followed by the function name, which
+    repeats what `room` and `function` already carry. Two spellings occur:
+    the plain one, and the Building-numbered one — and the latter keeps the
+    numbering the space had when the text was seeded, so a space that was
+    renumbered since leaves `3 - Terrasse (A3) Entertainment` beside a room
+    now called `2 - Terrasse (A2)`. The number is therefore matched
+    structurally, never compared. Case-insensitive and whitespace-tolerant.
+    """
+    text = " ".join(description.split())
+    parts = [part.strip() for part in (room, function) if part]
+    if text.lower() == " ".join(parts).lower():
+        return True
+    if not (room and function):
+        return False
+    numbered = re.compile(
+        r"^\d+\s*-\s*" + re.escape(room.strip()) + r"\s*(?:\([^)]*\))?\s+"
+        r"" + re.escape(function.strip()) + r"$",
+        re.IGNORECASE,
+    )
+    return numbered.match(text) is not None
 
 
 def _build_ga_to_function(
