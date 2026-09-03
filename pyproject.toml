@@ -34,7 +34,7 @@ tools = [
 # psycopg out of plain `pip install knx-nats-bridge`. The container image
 # installs this extra so the same image serves bridge and import job.
 import = [
-    "psycopg[binary]>=3.3.4",
+    "psycopg[binary]>=3.3.5",
 ]
 dev = [
     "pytest>=9.1.1",
