@@ -51,6 +51,7 @@ dev = [
 knx-nats-bridge = "knx_nats_bridge.main:run"
 knx-nats-bridge-import-catalog = "knx_nats_bridge.cli.import_catalog:main"
 knxproj-to-yaml = "knx_nats_bridge.tools.knxproj_to_yaml:main"
+knxproj-to-kaenx = "knx_nats_bridge.tools.knxproj_to_kaenx:main"
 
 [build-system]
 requires = ["hatchling"]
