@@ -127,6 +127,7 @@ class DeviceReport:
 
     objects: int = 0
     links: int = 0
+    app_version: int = 0  # version byte; ETS shows high.low nibble
     write: int = 0  # addresses on Write-flagged objects
     transmit: int = 0  # addresses on Transmit-flagged objects
     collectors: list[Collector] = field(default_factory=list)
@@ -356,6 +357,39 @@ def _dynamics(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+_APP_VERSION_RE = re.compile(r"_A-[0-9A-Fa-f]+-([0-9A-Fa-f]{2})-")
+
+
+def _imported_app_version(project_data: Mapping[str, Any], order_number: str) -> int | None:
+    """Version byte of the device's application as currently imported.
+
+    Generated devices carry their name slug as the ETS order number, so
+    that is the match. The version is the third segment of the
+    application program id (``M-00FA_A-AF66-11-0000`` -> 0x11 = V 1.1).
+    """
+    versions = []
+    for device in (project_data.get("devices", {}) or {}).values():
+        if not isinstance(device, dict) or device.get("order_number") != order_number:
+            continue
+        match = _APP_VERSION_RE.search(str(device.get("application") or ""))
+        if match:
+            versions.append(int(match.group(1), 16))
+    return max(versions, default=None)
+
+
+def _rename_first_section(catalog: list[Any], name: str, language: Mapping[str, Any]) -> None:
+    """Give the first exported catalog section the wanted name."""
+    for root in catalog:
+        if not isinstance(root, dict):
+            continue
+        for item in root.get("Items") or []:
+            if isinstance(item, dict) and item.get("IsSection"):
+                item["Name"] = name
+                item["Number"] = name
+                item["Text"] = [_translation(language, name)]
+                return
+
+
 def _prune_unnumbered_catalog_sections(catalog: list[Any]) -> None:
     """Drop catalog sections without a section number, recursively.
 
@@ -386,6 +420,7 @@ def build_device_model(
     spec: DeviceSpec,
     project_data: Mapping[str, Any],
     write_gas: frozenset[str],
+    catalog_section: str | None = None,
 ) -> tuple[dict[str, Any], DeviceReport]:
     """Fill a copy of the template with one collector object per
     (main group, datapoint main type, direction)."""
@@ -479,11 +514,18 @@ def build_device_model(
     application["ComObjectRefs"] = refs
     application["Dynamics"] = _dynamics(blocks)
     application["HighestComNumber"] = len(com_objects)
-    # Application.Number is the version byte (0x10 = V 1.0), not the
-    # application's identity — that is Info.AppNumber. The template's
-    # version is kept; bumping it is a publish-time decision.
+    # Application.Number is the version byte (0x10 = V 1.0; ETS shows
+    # high.low nibble), not the application's identity — that is
+    # Info.AppNumber. ETS silently refuses to re-import an application
+    # whose version it already knows, so the version is derived from
+    # the ETS export: one above what is imported, or the template's
+    # V 1.0 for a device ETS has never seen.
+    imported = _imported_app_version(project_data, spec.slug)
+    version = imported + 1 if imported is not None else int(application["Number"])
+    application["Number"] = version
+    report.app_version = version
     application["Name"] = spec.slug.lower()
-    application["NameText"] = f"V 1.0 {spec.name}"
+    application["NameText"] = f"V {version >> 4}.{version & 0xF} {spec.name}"
     application["Text"] = [_translation(language, spec.name)]
 
     model["ProjectName"] = spec.name
@@ -492,6 +534,8 @@ def build_device_model(
     # project, not a new project.
     model["Guid"] = str(uuid.uuid5(uuid.NAMESPACE_URL, f"lares-kaenx://{spec.slug}"))
     _prune_unnumbered_catalog_sections(model.get("Catalog") or [])
+    if catalog_section:
+        _rename_first_section(model.get("Catalog") or [], catalog_section, language)
 
     info_block = model["Info"]
     info_block["Name"] = spec.name
@@ -564,6 +608,11 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--catalog-section",
+        default=None,
+        help="Rename the exported catalog section (shown inside the manufacturer in ETS)",
+    )
+    parser.add_argument(
         "--output-dir", "-o", required=True, type=Path, help="Directory for the .ae-manu files"
     )
     parser.add_argument("--verbose", "-v", action="store_true")
@@ -591,14 +640,18 @@ def main(argv: list[str] | None = None) -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     failed = False
     for spec in specs:
-        model, report = build_device_model(template, spec, project_data, write_gas)
+        model, report = build_device_model(
+            template, spec, project_data, write_gas, catalog_section=args.catalog_section
+        )
         out = args.output_dir / f"{spec.slug.lower()}.ae-manu"
         out.write_text(json.dumps(model, indent=2, ensure_ascii=False), encoding="utf-8")
         worksheet = args.output_dir / f"{spec.slug.lower()}-wiring.md"
         worksheet.write_text(wiring_worksheet(spec, report), encoding="utf-8")
         logger.info(
-            "%s: %d collector objects, %d links (%d write, %d transmit) -> %s (+ %s)",
+            "%s: V %d.%d, %d collector objects, %d links (%d write, %d transmit) -> %s (+ %s)",
             spec.name,
+            report.app_version >> 4,
+            report.app_version & 0xF,
             report.objects,
             report.links,
             report.write,
