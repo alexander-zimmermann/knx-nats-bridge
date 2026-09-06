@@ -10,7 +10,7 @@ from knx_nats_bridge.tools.knxproj_to_kaenx import (
     build_device_model,
     device_group_addresses,
     parse_device_spec,
-    read_write_gas,
+    read_ga_list,
 )
 
 
@@ -116,7 +116,7 @@ def _project_data() -> dict[str, Any]:
 
 def test_parse_device_spec() -> None:
     spec = parse_device_spec("Bridge placeholder=KNX-NATS-Bridge:split", 100)
-    assert spec.pattern == "Bridge placeholder"
+    assert spec.source == "Bridge placeholder"
     assert spec.name == "KNX-NATS-Bridge"
     assert spec.mode == "split"
     assert spec.app_number == 100
@@ -131,14 +131,14 @@ def test_parse_device_spec_rejects(raw: str) -> None:
         parse_device_spec(raw, 100)
 
 
-def test_read_write_gas_accepts_addresses_and_subjects() -> None:
+def test_read_ga_list_accepts_addresses_and_subjects() -> None:
     text = "4/2/60\nknx.15.6.25  # comment\n\n# full-line comment\n"
-    assert read_write_gas(text) == frozenset({"4/2/60", "15/6/25"})
+    assert read_ga_list(text, origin="test") == frozenset({"4/2/60", "15/6/25"})
 
 
-def test_read_write_gas_rejects_garbage() -> None:
-    with pytest.raises(SystemExit):
-        read_write_gas("not-an-address\n")
+def test_read_ga_list_rejects_garbage() -> None:
+    with pytest.raises(SystemExit, match="test"):
+        read_ga_list("not-an-address\n", origin="test")
 
 
 def test_device_group_addresses_matches_by_substring() -> None:
@@ -236,4 +236,30 @@ def test_unmatched_write_gas_is_reported() -> None:
 def test_unknown_pattern_lists_devices() -> None:
     spec = parse_device_spec("nonexistent=Ghost:both", 100)
     with pytest.raises(SystemExit, match="Switch Actuator"):
+        build_device_model(_template(), spec, _project_data(), frozenset(), "knx")
+
+
+def test_file_source_builds_from_listed_addresses(tmp_path: Any) -> None:
+    ga_file = tmp_path / "bridge-gas.txt"
+    ga_file.write_text("knx.0.1.40\n4/2/60\n9/9/9\n", encoding="utf-8")
+    spec = parse_device_spec(f"@{ga_file}=KNX-NATS-Bridge:split", 100)
+    model, report = build_device_model(
+        _template(), spec, _project_data(), frozenset({"4/2/60"}), "knx"
+    )
+
+    objects = model["Application"]["ComObjects"]
+    # Listed addresses only — regardless of which ETS device carries them.
+    assert [o["Name"] for o in objects] == ["knx.0.1.40", "knx.4.2.60"]
+    assert (objects[0]["FlagTrans"], objects[0]["FlagRead"]) == (True, True)
+    assert objects[1]["FlagWrite"] is True
+    # An address the configuration lists but ETS does not know is the
+    # wiring error class this modelling exists to expose.
+    assert report.missing == ["9/9/9"]
+
+
+def test_file_source_rejects_empty_list(tmp_path: Any) -> None:
+    ga_file = tmp_path / "empty.txt"
+    ga_file.write_text("# nothing\n", encoding="utf-8")
+    spec = parse_device_spec(f"@{ga_file}=Ghost:both", 100)
+    with pytest.raises(SystemExit, match="lists no group addresses"):
         build_device_model(_template(), spec, _project_data(), frozenset(), "knx")
