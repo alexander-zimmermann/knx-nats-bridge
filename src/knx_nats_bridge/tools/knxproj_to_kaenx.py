@@ -4,39 +4,43 @@ The ETS project models bus participants that live in software — the
 KNX-NATS bridge, the Basalte visualisation, Node-Red — as placeholder
 devices whose only job is filter-table membership. This tool builds a
 real product database for each of them instead: one Kaenx-Creator
-project (.ae-manu) per device, with one communication object per group
-address the device touches, named after the NATS subject and flagged by
-direction. Kaenx-Creator (Windows) then exports the .knxprod that ETS
-imports.
+project (.ae-manu) per device. Kaenx-Creator (Windows) then exports the
+.knxprod that ETS imports.
+
+Objects are **collectors**: one communication object per main group and
+datapoint main type (and, on a ``split`` device, per direction), so a
+device carries a few dozen objects and every group address of a kind
+is linked to the same object with one multi-select in ETS. A wiring
+worksheet emitted beside each project lists, per object, exactly which
+addresses belong on it.
 
 Where a device's addresses come from is per device: a pattern or
 individual address collects what the ETS export links to the matching
-device(s) — right for placeholders that grew by hand — while a ``@file``
-source lists the addresses directly, so a device whose true footprint
-is defined by configuration (the bridge: writer-rule targets plus
-consumer-handled addresses) is generated from that configuration and
-ETS only supplies each address's name and datapoint type.
+device(s), while a ``@file`` source lists the addresses directly, so a
+device whose true footprint is defined by configuration (the bridge:
+writer-rule targets plus consumer-handled addresses; Basalte: the
+Studio export's bindings) is generated from that configuration and ETS
+only supplies each address's name and datapoint type.
 
 Flag modes per device:
 
-- ``split``: Write on addresses listed in ``--write-gas`` (a NATS
-  consumer acts on writes to them), Transmit+Read on the rest (the
-  bridge sends these and answers reads from its responder cache).
-  Keeps the catalog's ``writable`` vote exact.
-- ``both``: Write+Transmit on every object. For devices that both
-  display and send (visualisation) and stay excluded from the write
-  vote anyway.
+- ``split``: addresses listed in ``--write-gas`` (a NATS consumer acts
+  on writes to them) land on Write-flagged objects, the rest on
+  Transmit+Read objects (the bridge sends these and answers reads from
+  its responder cache). Keeps the catalog's ``writable`` vote exact.
+- ``both``: Write+Transmit objects. For devices that both display and
+  send (visualisation) and stay excluded from the write vote anyway.
 
 A template .ae-manu saved by the target Kaenx-Creator installation
 supplies everything version-specific (mask, load procedures, language);
 only naming, identity and the object tables are rewritten. Kaenx-Creator
 re-links datapoint types by number on load, so the emitted objects only
-carry ``TypeNumber``/``SubTypeNumber`` and a correct ``ObjectSize``.
+carry ``TypeNumber`` and a correct ``ObjectSize``.
 
 Example:
     knxproj-to-kaenx --input project.knxproj --template empty.ae-manu \\
         --device '@bridge-gas.txt=KNX-NATS-Bridge:split' --write-gas consumed.txt \\
-        --device 'basalte=Basalte Core S4:both' --output-dir out/
+        --device '@basalte-gas.txt=Basalte Core S4:both' --output-dir out/
 """
 
 from __future__ import annotations
@@ -60,137 +64,30 @@ logger = logging.getLogger(__name__)
 _SHARE = "Kaenx.Creator.Share"
 
 # Datapoint master data as Kaenx-Creator ships it (Data/datapoints.xml):
-# main number -> (size in bits, known subtype numbers). Objects must not
-# reference a type the target application cannot re-link on load, so
-# anything outside this table is skipped and reported.
-_DPT_MASTER: dict[int, tuple[int, frozenset[int]]] = {
-    1: (
-        1,
-        frozenset(
-            {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 24, 100}
-        ),
-    ),
-    2: (2, frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12})),
-    3: (4, frozenset({7, 8})),
-    4: (8, frozenset({1, 2})),
-    5: (8, frozenset({1, 3, 4, 5, 6, 10, 100})),
-    6: (8, frozenset({1, 10, 20})),
-    7: (16, frozenset({1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13, 600})),
-    8: (16, frozenset({1, 2, 3, 4, 5, 6, 7, 10, 11, 12})),
-    9: (
-        16,
-        frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30}),
-    ),
-    10: (24, frozenset({1})),
-    11: (24, frozenset({1})),
-    12: (32, frozenset({1, 100, 101, 102, 1200, 1201})),
-    13: (32, frozenset({1, 2, 10, 11, 12, 13, 14, 15, 16, 100, 1200, 1201})),
-    14: (32, frozenset(range(0, 80)) | frozenset({1200, 1201})),
-    15: (32, frozenset({0})),
-    16: (112, frozenset({0, 1})),
-    17: (8, frozenset({1})),
-    18: (8, frozenset({1})),
-    19: (64, frozenset({1})),
-    20: (
-        8,
-        frozenset(
-            {
-                1,
-                2,
-                3,
-                4,
-                5,
-                6,
-                7,
-                8,
-                11,
-                12,
-                13,
-                14,
-                17,
-                20,
-                21,
-                22,
-                100,
-                101,
-                102,
-                103,
-                104,
-                105,
-                106,
-                107,
-                108,
-                109,
-                110,
-                111,
-                112,
-                113,
-                114,
-                115,
-                116,
-                120,
-                121,
-                122,
-                600,
-                601,
-                602,
-                603,
-                604,
-                605,
-                606,
-                607,
-                608,
-                609,
-                610,
-                611,
-                801,
-                802,
-                803,
-                804,
-                1000,
-                1001,
-                1002,
-                1003,
-            }
-        ),
-    ),
-    21: (8, frozenset({1, 2, 100, 101, 102, 103, 104, 105, 106, 107, 601, 1000, 1001, 1010})),
-    22: (16, frozenset({100, 101, 102, 103, 1000, 1010})),
-    23: (2, frozenset({1, 2, 3, 102})),
-    25: (8, frozenset({1000})),
-    26: (8, frozenset({1})),
-    27: (32, frozenset({1})),
-    29: (64, frozenset({10, 11, 12})),
-    30: (24, frozenset({1010})),
-    206: (24, frozenset({100, 102, 104, 105})),
-    217: (16, frozenset({1})),
-    219: (48, frozenset({1})),
-    222: (48, frozenset({100, 101})),
-    225: (24, frozenset({1, 2})),
-    229: (48, frozenset({1})),
-    230: (64, frozenset({1000})),
-    232: (24, frozenset({600})),
-    234: (16, frozenset({1})),
-    235: (48, frozenset({1})),
-    236: (8, frozenset({1})),
-    237: (16, frozenset({600})),
-    238: (8, frozenset({600})),
-    240: (24, frozenset({800})),
-    241: (32, frozenset({800})),
-    242: (48, frozenset({600})),
-    244: (16, frozenset({600})),
-    245: (48, frozenset({600})),
-    246: (16, frozenset({600})),
-    249: (48, frozenset({600})),
-    250: (24, frozenset({600})),
-    251: (48, frozenset({600})),
-    252: (40, frozenset({600})),
-    254: (24, frozenset({600})),
-    255: (64, frozenset({1})),
-    275: (64, frozenset({100, 101})),
+# main number -> size in bits. Objects must not reference a type the
+# target application cannot re-link on load, so anything outside this
+# table is skipped and reported.
+# fmt: off
+_DPT_SIZE_BITS: dict[int, int] = {
+    1: 1, 2: 2, 3: 4, 4: 8, 5: 8, 6: 8, 7: 16, 8: 16, 9: 16, 10: 24,
+    11: 24, 12: 32, 13: 32, 14: 32, 15: 32, 16: 112, 17: 8, 18: 8,
+    19: 64, 20: 8, 21: 8, 22: 16, 23: 2, 25: 8, 26: 8, 27: 32, 29: 64,
+    30: 24, 206: 24, 217: 16, 219: 48, 222: 48, 225: 24, 229: 48,
+    230: 64, 232: 24, 234: 16, 235: 48, 236: 8, 237: 16, 238: 8,
+    240: 24, 241: 32, 242: 48, 244: 16, 245: 48, 246: 16, 249: 48,
+    250: 24, 251: 48, 252: 40, 254: 24, 255: 64, 275: 64,
 }
+# fmt: on
 
 _GA_RE = re.compile(r"^(\d{1,2})/(\d)/(\d{1,3})$")
+
+# Direction of a collector object, in bus terms: displayed function
+# text and the flags that implement it.
+_DIRECTIONS = {
+    "transmit": ("sendet auf den Bus", {"transmit": True, "read": True}),
+    "write": ("empfängt vom Bus", {"write": True}),
+    "both": ("sendet und empfängt", {"write": True, "transmit": True}),
+}
 
 
 @dataclass(frozen=True)
@@ -214,12 +111,25 @@ class DeviceSpec:
 
 
 @dataclass
+class Collector:
+    """One collector object and the addresses that belong on it."""
+
+    main_group: int
+    dpt_main: int
+    direction: str  # key into _DIRECTIONS
+    text: str = ""
+    entries: list[tuple[str, str]] = field(default_factory=list)  # (ga, ETS name)
+
+
+@dataclass
 class DeviceReport:
     """What a device build produced and what it had to leave out."""
 
     objects: int = 0
-    write: int = 0
-    transmit: int = 0
+    links: int = 0
+    write: int = 0  # addresses on Write-flagged objects
+    transmit: int = 0  # addresses on Transmit-flagged objects
+    collectors: list[Collector] = field(default_factory=list)
     skipped: list[tuple[str, str]] = field(default_factory=list)  # (ga, reason)
     unmatched_write_gas: list[str] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)  # listed in a @file, absent from ETS
@@ -299,6 +209,17 @@ def device_group_addresses(project_data: Mapping[str, Any], pattern: str) -> dic
     return result
 
 
+def _main_group_names(project_data: Mapping[str, Any]) -> dict[int, str]:
+    """{main group number -> ETS range name}, best effort."""
+    names: dict[int, str] = {}
+    for key, group_range in (project_data.get("group_ranges", {}) or {}).items():
+        if isinstance(group_range, dict) and str(key).isdigit():
+            name = str(group_range.get("name") or "").strip()
+            if name:
+                names[int(key)] = name
+    return names
+
+
 def _translation(language: Mapping[str, Any], text: str) -> dict[str, Any]:
     return {
         "$type": f"Kaenx.Creator.Models.Translation, {_SHARE}",
@@ -308,24 +229,14 @@ def _translation(language: Mapping[str, Any], text: str) -> dict[str, Any]:
     }
 
 
-def _com_object(
-    number: int,
-    name: str,
-    text: str,
-    function_text: str,
-    dpt_main: int,
-    dpt_sub: int | None,
-    flags: Mapping[str, bool],
-    language: Mapping[str, Any],
-) -> dict[str, Any]:
-    size, known_subs = _DPT_MASTER[dpt_main]
-    has_sub = dpt_sub is not None and dpt_sub in known_subs
+def _com_object(number: int, collector: Collector, language: Mapping[str, Any]) -> dict[str, Any]:
+    function_text, flags = _DIRECTIONS[collector.direction]
     return {
         "$type": f"Kaenx.Creator.Models.ComObject, {_SHARE}",
         "UId": number,
         "Id": number,
-        "Name": name,
-        "Text": [_translation(language, text)],
+        "Name": f"hg{collector.main_group}-dpt{collector.dpt_main}-{collector.direction}",
+        "Text": [_translation(language, collector.text)],
         "TranslationText": False,
         "FunctionText": [_translation(language, function_text)],
         "TranslationFunctionText": False,
@@ -338,11 +249,11 @@ def _com_object(
         "FlagOnInit": False,
         "TypeValue": None,
         "HasDpt": True,
-        "HasDpts": has_sub,
-        "ObjectSize": size,
-        "SubTypeNumber": str(dpt_sub) if has_sub else None,
+        "HasDpts": False,
+        "ObjectSize": _DPT_SIZE_BITS[collector.dpt_main],
+        "SubTypeNumber": None,
         "SubType": None,
-        "TypeNumber": str(dpt_main),
+        "TypeNumber": str(collector.dpt_main),
         "Type": None,
         "UseTextParameter": False,
         "ParameterRef": -1,
@@ -388,30 +299,15 @@ def _com_object_ref(com_object: Mapping[str, Any], language: Mapping[str, Any]) 
     }
 
 
-def _dynamics(
-    refs: Iterable[Mapping[str, Any]], language: Mapping[str, Any]
-) -> list[dict[str, Any]]:
-    """Root -> independent channel -> one block holding every object.
-
-    The nesting is the one Kaenx-Creator builds itself; objects placed
-    anywhere else fail its publish checks.
-    """
-    dyn_objects = [
-        {
-            "$type": f"Kaenx.Creator.Models.Dynamic.DynComObject, {_SHARE}",
-            "IsExpanded": False,
-            "Name": "",
-            "ComObjectRef": ref["UId"],
-            "Items": None,
-        }
-        for ref in refs
-    ]
-    block = {
+def _dyn_block(
+    block_id: int, name: str, refs: Iterable[Mapping[str, Any]], language: Mapping[str, Any]
+) -> dict[str, Any]:
+    return {
         "$type": f"Kaenx.Creator.Models.Dynamic.DynParaBlock, {_SHARE}",
         "IsExpanded": False,
-        "Id": 1,
-        "Name": "Objects",
-        "Text": [_translation(language, "Objekte")],
+        "Id": block_id,
+        "Name": f"block-{block_id}",
+        "Text": [_translation(language, name)],
         "TranslationText": False,
         "UseParameterRef": False,
         "ParameterRef": -1,
@@ -425,13 +321,30 @@ def _dynamics(
         "ShowInComObjectTree": True,
         "Rows": [],
         "Columns": [],
-        "Items": dyn_objects,
+        "Items": [
+            {
+                "$type": f"Kaenx.Creator.Models.Dynamic.DynComObject, {_SHARE}",
+                "IsExpanded": False,
+                "Name": "",
+                "ComObjectRef": ref["UId"],
+                "Items": None,
+            }
+            for ref in refs
+        ],
     }
+
+
+def _dynamics(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Root -> independent channel -> one block per main group.
+
+    The nesting is the one Kaenx-Creator builds itself; objects placed
+    anywhere else fail its publish checks.
+    """
     channel = {
         "$type": f"Kaenx.Creator.Models.Dynamic.DynChannelIndependent, {_SHARE}",
         "IsExpanded": True,
         "Name": "",
-        "Items": [block],
+        "Items": blocks,
     }
     return [
         {
@@ -443,14 +356,39 @@ def _dynamics(
     ]
 
 
+def _prune_unnumbered_catalog_sections(catalog: list[Any]) -> None:
+    """Drop catalog sections without a section number, recursively.
+
+    Creating a project in the Kaenx-Creator GUI leaves an empty "Neue
+    Kategorie" section behind, and its missing number fails the publish
+    checks. The root section is exempt — it is never exported.
+    """
+    for root in catalog:
+        if not isinstance(root, dict):
+            continue
+        root["Items"] = _numbered_items(root.get("Items") or [])
+
+
+def _numbered_items(items: list[Any]) -> list[Any]:
+    kept = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("IsSection") and not (item.get("Number") or "").strip():
+            continue
+        item["Items"] = _numbered_items(item.get("Items") or [])
+        kept.append(item)
+    return kept
+
+
 def build_device_model(
     template: Mapping[str, Any],
     spec: DeviceSpec,
     project_data: Mapping[str, Any],
     write_gas: frozenset[str],
-    subject_prefix: str,
 ) -> tuple[dict[str, Any], DeviceReport]:
-    """Fill a copy of the template with one object per group address."""
+    """Fill a copy of the template with one collector object per
+    (main group, datapoint main type, direction)."""
     model = copy.deepcopy(dict(template))
     application = model["Application"]
     language = dict(application["Languages"][0])
@@ -477,7 +415,8 @@ def build_device_model(
                 "devices in the project:\n  " + "\n  ".join(available)
             )
 
-    com_objects: list[dict[str, Any]] = []
+    hg_names = _main_group_names(project_data)
+    collectors: dict[tuple[int, int, str], Collector] = {}
     for ga in sorted(gas, key=_ga_sort_key):
         info = gas[ga]
         dpt = info.get("dpt")
@@ -485,44 +424,64 @@ def build_device_model(
         if main is None:
             report.skipped.append((ga, "no DPT assigned in ETS"))
             continue
-        if int(main) not in _DPT_MASTER:
+        if int(main) not in _DPT_SIZE_BITS:
             report.skipped.append((ga, f"DPT {main} unknown to Kaenx-Creator"))
             continue
-        sub = dpt.get("sub") if isinstance(dpt, dict) else None
 
-        consumed = spec.mode == "split" and ga in write_gas
         if spec.mode == "both":
-            flags = {"write": True, "transmit": True}
-        elif consumed:
-            flags = {"write": True}
+            direction = "both"
+        elif ga in write_gas:
+            direction = "write"
         else:
-            flags = {"transmit": True, "read": True}
-        report.write += flags.get("write", False)
-        report.transmit += flags.get("transmit", False)
-
-        subject = f"{subject_prefix}.{ga.replace('/', '.')}"
-        com_objects.append(
-            _com_object(
-                number=len(com_objects) + 1,
-                name=subject,
-                text=str(info.get("name") or subject),
-                function_text=ga,
-                dpt_main=int(main),
-                dpt_sub=int(sub) if sub is not None else None,
-                flags=flags,
-                language=language,
-            )
+            direction = "transmit"
+        main_group = int(ga.split("/")[0])
+        key = (main_group, int(main), direction)
+        collector = collectors.setdefault(
+            key, Collector(main_group=main_group, dpt_main=int(main), direction=direction)
         )
-    report.objects = len(com_objects)
+        collector.entries.append((ga, str(info.get("name") or "")))
+        report.links += 1
+        report.write += direction in ("write", "both")
+        report.transmit += direction in ("transmit", "both")
     if spec.mode == "split":
         report.unmatched_write_gas = sorted(write_gas - set(gas), key=_ga_sort_key)
 
+    # Stable object order: main group, datapoint type, sending before
+    # receiving — so a regeneration keeps the numbers and existing ETS
+    # links survive an application update.
+    ordered = sorted(
+        collectors.values(),
+        key=lambda c: (c.main_group, c.dpt_main, c.direction == "write"),
+    )
+    com_objects: list[dict[str, Any]] = []
+    for number, collector in enumerate(ordered, start=1):
+        hg_name = hg_names.get(collector.main_group, f"Hauptgruppe {collector.main_group}")
+        suffix = {"write": " · empfängt", "transmit": " · sendet"}.get(collector.direction, "")
+        collector.text = f"{hg_name} · {collector.dpt_main}.xxx{suffix}"
+        com_objects.append(_com_object(number, collector, language))
+    report.objects = len(com_objects)
+    report.collectors = ordered
+
     refs = [_com_object_ref(co, language) for co in com_objects]
+    blocks: list[dict[str, Any]] = []
+    for main_group in sorted({c.main_group for c in ordered}):
+        block_refs = [
+            ref
+            for ref, collector in zip(refs, ordered, strict=True)
+            if collector.main_group == main_group
+        ]
+        hg_name = hg_names.get(main_group, f"Hauptgruppe {main_group}")
+        blocks.append(
+            _dyn_block(len(blocks) + 1, f"{main_group} · {hg_name}", block_refs, language)
+        )
+
     application["ComObjects"] = com_objects
     application["ComObjectRefs"] = refs
-    application["Dynamics"] = _dynamics(refs, language)
+    application["Dynamics"] = _dynamics(blocks)
     application["HighestComNumber"] = len(com_objects)
-    application["Number"] = spec.app_number
+    # Application.Number is the version byte (0x10 = V 1.0), not the
+    # application's identity — that is Info.AppNumber. The template's
+    # version is kept; bumping it is a publish-time decision.
     application["Name"] = spec.slug.lower()
     application["NameText"] = f"V 1.0 {spec.name}"
     application["Text"] = [_translation(language, spec.name)]
@@ -532,6 +491,7 @@ def build_device_model(
     # Stable per device so a regeneration is a new version of the same
     # project, not a new project.
     model["Guid"] = str(uuid.uuid5(uuid.NAMESPACE_URL, f"lares-kaenx://{spec.slug}"))
+    _prune_unnumbered_catalog_sections(model.get("Catalog") or [])
 
     info_block = model["Info"]
     info_block["Name"] = spec.name
@@ -542,6 +502,24 @@ def build_device_model(
     info_block["Description"] = [_translation(language, spec.name)]
 
     return model, report
+
+
+def wiring_worksheet(spec: DeviceSpec, report: DeviceReport) -> str:
+    """Markdown checklist: per collector object, the addresses to link."""
+    lines = [
+        f"# Verdrahtung: {spec.name}",
+        "",
+        f"{report.objects} Sammel-Objekte, {report.links} Verknüpfungen. Pro Objekt in ETS:",
+        "die GAs unten per Mehrfachauswahl markieren und auf das Objekt ziehen.",
+    ]
+    for number, collector in enumerate(report.collectors, start=1):
+        lines += ["", f"## Objekt {number}: {collector.text} ({len(collector.entries)} GAs)", ""]
+        lines += [f"- [ ] `{ga}` {name}" for ga, name in collector.entries]
+    if report.skipped:
+        lines += ["", "## Nicht aufgenommen", ""]
+        lines += [f"- `{ga}` — {reason}" for ga, reason in report.skipped]
+    lines.append("")
+    return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -568,10 +546,11 @@ def main(argv: list[str] | None = None) -> int:
             "a file listing the group addresses directly (one address or NATS "
             "subject per line), for a device whose footprint is defined by "
             "configuration rather than by the ETS project; NAME names the "
-            "generated product; MODE is 'split' (Write on --write-gas addresses, "
-            "Transmit+Read otherwise) or 'both' (Write+Transmit on everything). "
-            "Repeatable; the application number is 100 plus the argument's "
-            "position, so keep the order stable."
+            "generated product; MODE is 'split' (Write-flagged collector objects "
+            "for --write-gas addresses, Transmit+Read collectors otherwise) or "
+            "'both' (Write+Transmit collectors). Repeatable; the application "
+            "number is 100 plus the argument's position, so keep the order "
+            "stable."
         ),
     )
     parser.add_argument(
@@ -583,11 +562,6 @@ def main(argv: list[str] | None = None) -> int:
             "addresses whose writes a NATS consumer acts on. Required when a "
             "device uses mode 'split'."
         ),
-    )
-    parser.add_argument(
-        "--subject-prefix",
-        default="knx",
-        help="NATS subject prefix used for object names (default: knx)",
     )
     parser.add_argument(
         "--output-dir", "-o", required=True, type=Path, help="Directory for the .ae-manu files"
@@ -617,18 +591,20 @@ def main(argv: list[str] | None = None) -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     failed = False
     for spec in specs:
-        model, report = build_device_model(
-            template, spec, project_data, write_gas, args.subject_prefix
-        )
+        model, report = build_device_model(template, spec, project_data, write_gas)
         out = args.output_dir / f"{spec.slug.lower()}.ae-manu"
         out.write_text(json.dumps(model, indent=2, ensure_ascii=False), encoding="utf-8")
+        worksheet = args.output_dir / f"{spec.slug.lower()}-wiring.md"
+        worksheet.write_text(wiring_worksheet(spec, report), encoding="utf-8")
         logger.info(
-            "%s: %d objects (%d write, %d transmit) -> %s",
+            "%s: %d collector objects, %d links (%d write, %d transmit) -> %s (+ %s)",
             spec.name,
             report.objects,
+            report.links,
             report.write,
             report.transmit,
             out,
+            worksheet.name,
         )
         for ga, reason in report.skipped:
             logger.warning(
