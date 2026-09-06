@@ -443,6 +443,31 @@ def _dynamics(
     ]
 
 
+def _prune_unnumbered_catalog_sections(catalog: list[Any]) -> None:
+    """Drop catalog sections without a section number, recursively.
+
+    Creating a project in the Kaenx-Creator GUI leaves an empty "Neue
+    Kategorie" section behind, and its missing number fails the publish
+    checks. The root section is exempt — it is never exported.
+    """
+    for root in catalog:
+        if not isinstance(root, dict):
+            continue
+        root["Items"] = _numbered_items(root.get("Items") or [])
+
+
+def _numbered_items(items: list[Any]) -> list[Any]:
+    kept = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("IsSection") and not (item.get("Number") or "").strip():
+            continue
+        item["Items"] = _numbered_items(item.get("Items") or [])
+        kept.append(item)
+    return kept
+
+
 def build_device_model(
     template: Mapping[str, Any],
     spec: DeviceSpec,
@@ -522,7 +547,9 @@ def build_device_model(
     application["ComObjectRefs"] = refs
     application["Dynamics"] = _dynamics(refs, language)
     application["HighestComNumber"] = len(com_objects)
-    application["Number"] = spec.app_number
+    # Application.Number is the version byte (0x10 = V 1.0), not the
+    # application's identity — that is Info.AppNumber. The template's
+    # version is kept; bumping it is a publish-time decision.
     application["Name"] = spec.slug.lower()
     application["NameText"] = f"V 1.0 {spec.name}"
     application["Text"] = [_translation(language, spec.name)]
@@ -532,6 +559,7 @@ def build_device_model(
     # Stable per device so a regeneration is a new version of the same
     # project, not a new project.
     model["Guid"] = str(uuid.uuid5(uuid.NAMESPACE_URL, f"lares-kaenx://{spec.slug}"))
+    _prune_unnumbered_catalog_sections(model.get("Catalog") or [])
 
     info_block = model["Info"]
     info_block["Name"] = spec.name

@@ -47,6 +47,23 @@ def _template() -> dict[str, Any]:
             "Number": 16,
             "HighestComNumber": 0,
         },
+        "Catalog": [
+            {
+                "Name": "Hauptkategorie (wird nicht exportiert)",
+                "Number": None,
+                "IsSection": True,
+                "Items": [
+                    {
+                        "Name": "Lares",
+                        "Number": "Lares",
+                        "IsSection": True,
+                        "Items": [{"Name": "hardware", "Number": "1", "IsSection": False}],
+                    },
+                    # The GUI leftover whose empty number fails the publish checks.
+                    {"Name": "Neue Kategorie", "Number": None, "IsSection": True, "Items": []},
+                ],
+            }
+        ],
         "ImportVersion": 10,
         "ManufacturerId": 175,
     }
@@ -220,12 +237,22 @@ def test_identity_fields_and_deterministic_guid() -> None:
     assert model["Info"]["SerialNumber"] == "KNX-NATS-BRIDGE"
     assert model["Info"]["OrderNumber"] == "KNX-NATS-BRIDGE"
     assert model["Info"]["AppNumber"] == 100
-    assert model["Application"]["Number"] == 100
+    # Application.Number is the version byte, not the identity — the
+    # template's V 1.0 must survive.
+    assert model["Application"]["Number"] == 16
     assert model["Application"]["HighestComNumber"] == 3
 
     again, _ = _build()
     assert again["Guid"] == model["Guid"]
     assert model["Guid"] != _template()["Guid"]
+
+
+def test_catalog_keeps_numbered_sections_only() -> None:
+    model, _ = _build()
+    items = model["Catalog"][0]["Items"]
+    assert [i["Name"] for i in items] == ["Lares"]
+    # Non-section entries survive regardless of their number.
+    assert [i["Name"] for i in items[0]["Items"]] == ["hardware"]
 
 
 def test_unmatched_write_gas_is_reported() -> None:
