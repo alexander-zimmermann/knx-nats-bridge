@@ -79,6 +79,212 @@ _DPT_SIZE_BITS: dict[int, int] = {
 }
 # fmt: on
 
+# Known subtype numbers per main type, same source. A collector whose
+# addresses all share one known subtype carries it, so ETS shows the
+# exact unit; mixed or unknown subtypes fall back to the main type.
+_DPT_SUBTYPES: dict[int, frozenset[int]] = {
+    1: frozenset(
+        {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 24, 100}
+    ),
+    2: frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}),
+    3: frozenset({7, 8}),
+    4: frozenset({1, 2}),
+    5: frozenset({1, 3, 4, 5, 6, 10, 100}),
+    6: frozenset({1, 10, 20}),
+    7: frozenset({1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13, 600}),
+    8: frozenset({1, 2, 3, 4, 5, 6, 7, 10, 11, 12}),
+    9: frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30}),
+    10: frozenset({1}),
+    11: frozenset({1}),
+    12: frozenset({1, 100, 101, 102, 1200, 1201}),
+    13: frozenset({1, 2, 10, 11, 12, 13, 14, 15, 16, 100, 1200, 1201}),
+    14: frozenset(
+        {
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52,
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60,
+            61,
+            62,
+            63,
+            64,
+            65,
+            66,
+            67,
+            68,
+            69,
+            70,
+            71,
+            72,
+            73,
+            74,
+            75,
+            76,
+            77,
+            78,
+            79,
+            1200,
+            1201,
+        }
+    ),
+    15: frozenset({0}),
+    16: frozenset({0, 1}),
+    17: frozenset({1}),
+    18: frozenset({1}),
+    19: frozenset({1}),
+    20: frozenset(
+        {
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            11,
+            12,
+            13,
+            14,
+            17,
+            20,
+            21,
+            22,
+            100,
+            101,
+            102,
+            103,
+            104,
+            105,
+            106,
+            107,
+            108,
+            109,
+            110,
+            111,
+            112,
+            113,
+            114,
+            115,
+            116,
+            120,
+            121,
+            122,
+            600,
+            601,
+            602,
+            603,
+            604,
+            605,
+            606,
+            607,
+            608,
+            609,
+            610,
+            611,
+            801,
+            802,
+            803,
+            804,
+            1000,
+            1001,
+            1002,
+            1003,
+        }
+    ),
+    21: frozenset({1, 2, 100, 101, 102, 103, 104, 105, 106, 107, 601, 1000, 1001, 1010}),
+    22: frozenset({100, 101, 102, 103, 1000, 1010}),
+    23: frozenset({1, 2, 3, 102}),
+    25: frozenset({1000}),
+    26: frozenset({1}),
+    27: frozenset({1}),
+    29: frozenset({10, 11, 12}),
+    30: frozenset({1010}),
+    206: frozenset({100, 102, 104, 105}),
+    217: frozenset({1}),
+    219: frozenset({1}),
+    222: frozenset({100, 101}),
+    225: frozenset({1, 2}),
+    229: frozenset({1}),
+    230: frozenset({1000}),
+    232: frozenset({600}),
+    234: frozenset({1}),
+    235: frozenset({1}),
+    236: frozenset({1}),
+    237: frozenset({600}),
+    238: frozenset({600}),
+    240: frozenset({800}),
+    241: frozenset({800}),
+    242: frozenset({600}),
+    244: frozenset({600}),
+    245: frozenset({600}),
+    246: frozenset({600}),
+    249: frozenset({600}),
+    250: frozenset({600}),
+    251: frozenset({600}),
+    252: frozenset({600}),
+    254: frozenset({600}),
+    255: frozenset({1}),
+    275: frozenset({100, 101}),
+}
+
 _GA_RE = re.compile(r"^(\d{1,2})/(\d)/(\d{1,3})$")
 
 # Direction of a collector object, in bus terms: displayed function
@@ -119,6 +325,17 @@ class Collector:
     direction: str  # key into _DIRECTIONS
     text: str = ""
     entries: list[tuple[str, str]] = field(default_factory=list)  # (ga, ETS name)
+    subs: set[int | None] = field(default_factory=set)
+
+    @property
+    def uniform_sub(self) -> int | None:
+        """The one subtype every address shares, if it is known to Kaenx."""
+        if len(self.subs) != 1:
+            return None
+        sub = next(iter(self.subs))
+        if sub is None or sub not in _DPT_SUBTYPES.get(self.dpt_main, frozenset()):
+            return None
+        return sub
 
 
 @dataclass
@@ -232,6 +449,7 @@ def _translation(language: Mapping[str, Any], text: str) -> dict[str, Any]:
 
 def _com_object(number: int, collector: Collector, language: Mapping[str, Any]) -> dict[str, Any]:
     function_text, flags = _DIRECTIONS[collector.direction]
+    sub = collector.uniform_sub
     return {
         "$type": f"Kaenx.Creator.Models.ComObject, {_SHARE}",
         "UId": number,
@@ -250,9 +468,9 @@ def _com_object(number: int, collector: Collector, language: Mapping[str, Any]) 
         "FlagOnInit": False,
         "TypeValue": None,
         "HasDpt": True,
-        "HasDpts": False,
+        "HasDpts": sub is not None,
         "ObjectSize": _DPT_SIZE_BITS[collector.dpt_main],
-        "SubTypeNumber": None,
+        "SubTypeNumber": str(sub) if sub is not None else None,
         "SubType": None,
         "TypeNumber": str(collector.dpt_main),
         "Type": None,
@@ -475,6 +693,8 @@ def build_device_model(
             key, Collector(main_group=main_group, dpt_main=int(main), direction=direction)
         )
         collector.entries.append((ga, str(info.get("name") or "")))
+        sub = dpt.get("sub") if isinstance(dpt, dict) else None
+        collector.subs.add(int(sub) if sub is not None else None)
         report.links += 1
         report.write += direction in ("write", "both")
         report.transmit += direction in ("transmit", "both")
