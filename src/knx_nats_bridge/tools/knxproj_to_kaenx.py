@@ -8,9 +8,10 @@ project (.ae-manu) per device. Kaenx-Creator (Windows) then exports the
 .knxprod that ETS imports.
 
 Objects are **collectors**: one communication object per main group and
-datapoint main type (and, on a ``split`` device, per direction), so a
-device carries a few dozen objects and every group address of a kind
-is linked to the same object with one multi-select in ETS. A wiring
+datapoint type — the exact subtype where ETS declares one, the main
+type for the rest — and, on a ``split`` device, per direction. A device
+carries a few dozen objects and every group address of a kind is
+linked to the same object with one multi-select in ETS. A wiring
 worksheet emitted beside each project lists, per object, exactly which
 addresses belong on it.
 
@@ -79,9 +80,10 @@ _DPT_SIZE_BITS: dict[int, int] = {
 }
 # fmt: on
 
-# Known subtype numbers per main type, same source. A collector whose
-# addresses all share one known subtype carries it, so ETS shows the
-# exact unit; mixed or unknown subtypes fall back to the main type.
+# Known subtype numbers per main type, same source. Collectors are cut
+# per subtype so ETS shows the exact unit; an address whose subtype
+# Kaenx-Creator does not know joins the main-type collector, because a
+# subtype the target application cannot re-link would fail its load.
 _DPT_SUBTYPES: dict[int, frozenset[int]] = {
     1: frozenset(
         {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 24, 100}
@@ -322,20 +324,16 @@ class Collector:
 
     main_group: int
     dpt_main: int
+    dpt_sub: int | None  # None collects the addresses without a (known) subtype
     direction: str  # key into _DIRECTIONS
     text: str = ""
     entries: list[tuple[str, str]] = field(default_factory=list)  # (ga, ETS name)
-    subs: set[int | None] = field(default_factory=set)
 
     @property
-    def uniform_sub(self) -> int | None:
-        """The one subtype every address shares, if it is known to Kaenx."""
-        if len(self.subs) != 1:
-            return None
-        sub = next(iter(self.subs))
-        if sub is None or sub not in _DPT_SUBTYPES.get(self.dpt_main, frozenset()):
-            return None
-        return sub
+    def dpt_label(self) -> str:
+        if self.dpt_sub is None:
+            return f"{self.dpt_main}.xxx"
+        return f"{self.dpt_main}.{self.dpt_sub:03d}"
 
 
 @dataclass
@@ -449,12 +447,12 @@ def _translation(language: Mapping[str, Any], text: str) -> dict[str, Any]:
 
 def _com_object(number: int, collector: Collector, language: Mapping[str, Any]) -> dict[str, Any]:
     function_text, flags = _DIRECTIONS[collector.direction]
-    sub = collector.uniform_sub
+    sub = collector.dpt_sub
     return {
         "$type": f"Kaenx.Creator.Models.ComObject, {_SHARE}",
         "UId": number,
         "Id": number,
-        "Name": f"hg{collector.main_group}-dpt{collector.dpt_main}-{collector.direction}",
+        "Name": f"hg{collector.main_group}-dpt{collector.dpt_label}-{collector.direction}",
         "Text": [_translation(language, collector.text)],
         "TranslationText": False,
         "FunctionText": [_translation(language, function_text)],
@@ -669,7 +667,7 @@ def build_device_model(
             )
 
     hg_names = _main_group_names(project_data)
-    collectors: dict[tuple[int, int, str], Collector] = {}
+    collectors: dict[tuple[int, int, int | None, str], Collector] = {}
     for ga in sorted(gas, key=_ga_sort_key):
         info = gas[ga]
         dpt = info.get("dpt")
@@ -688,31 +686,42 @@ def build_device_model(
         else:
             direction = "transmit"
         main_group = int(ga.split("/")[0])
-        key = (main_group, int(main), direction)
+        raw_sub = dpt.get("sub") if isinstance(dpt, dict) else None
+        sub = int(raw_sub) if raw_sub is not None else None
+        if sub is not None and sub not in _DPT_SUBTYPES.get(int(main), frozenset()):
+            # A subtype Kaenx-Creator cannot re-link would fail its load;
+            # the address joins the main-type collector instead.
+            sub = None
+        key = (main_group, int(main), sub, direction)
         collector = collectors.setdefault(
-            key, Collector(main_group=main_group, dpt_main=int(main), direction=direction)
+            key,
+            Collector(main_group=main_group, dpt_main=int(main), dpt_sub=sub, direction=direction),
         )
         collector.entries.append((ga, str(info.get("name") or "")))
-        sub = dpt.get("sub") if isinstance(dpt, dict) else None
-        collector.subs.add(int(sub) if sub is not None else None)
         report.links += 1
         report.write += direction in ("write", "both")
         report.transmit += direction in ("transmit", "both")
     if spec.mode == "split":
         report.unmatched_write_gas = sorted(write_gas - set(gas), key=_ga_sort_key)
 
-    # Stable object order: main group, datapoint type, sending before
-    # receiving — so a regeneration keeps the numbers and existing ETS
-    # links survive an application update.
+    # Stable object order: main group, datapoint type (main-type
+    # collector before its subtypes), sending before receiving — so a
+    # regeneration keeps the numbers and existing ETS links survive an
+    # application update.
     ordered = sorted(
         collectors.values(),
-        key=lambda c: (c.main_group, c.dpt_main, c.direction == "write"),
+        key=lambda c: (
+            c.main_group,
+            c.dpt_main,
+            -1 if c.dpt_sub is None else c.dpt_sub,
+            c.direction == "write",
+        ),
     )
     com_objects: list[dict[str, Any]] = []
     for number, collector in enumerate(ordered, start=1):
         hg_name = hg_names.get(collector.main_group, f"Hauptgruppe {collector.main_group}")
         suffix = {"write": " · empfängt", "transmit": " · sendet"}.get(collector.direction, "")
-        collector.text = f"{hg_name} · {collector.dpt_main}.xxx{suffix}"
+        collector.text = f"{hg_name} · {collector.dpt_label}{suffix}"
         com_objects.append(_com_object(number, collector, language))
     report.objects = len(com_objects)
     report.collectors = ordered
