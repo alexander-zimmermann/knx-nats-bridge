@@ -5,16 +5,24 @@ KNX-NATS bridge, the Basalte visualisation, Node-Red — as placeholder
 devices whose only job is filter-table membership. This tool builds a
 real product database for each of them instead: one Kaenx-Creator
 project (.ae-manu) per device, with one communication object per group
-address the device touches in the current ETS export, named after the
-NATS subject and flagged by direction. Kaenx-Creator (Windows) then
-exports the .knxprod that ETS imports.
+address the device touches, named after the NATS subject and flagged by
+direction. Kaenx-Creator (Windows) then exports the .knxprod that ETS
+imports.
+
+Where a device's addresses come from is per device: a pattern or
+individual address collects what the ETS export links to the matching
+device(s) — right for placeholders that grew by hand — while a ``@file``
+source lists the addresses directly, so a device whose true footprint
+is defined by configuration (the bridge: writer-rule targets plus
+consumer-handled addresses) is generated from that configuration and
+ETS only supplies each address's name and datapoint type.
 
 Flag modes per device:
 
 - ``split``: Write on addresses listed in ``--write-gas`` (a NATS
-  consumer acts on writes to them), Transmit+Read on the rest (mirrored
-  to NATS, reads answered from the responder cache). Keeps the
-  catalog's ``writable`` vote exact.
+  consumer acts on writes to them), Transmit+Read on the rest (the
+  bridge sends these and answers reads from its responder cache).
+  Keeps the catalog's ``writable`` vote exact.
 - ``both``: Write+Transmit on every object. For devices that both
   display and send (visualisation) and stay excluded from the write
   vote anyway.
@@ -27,7 +35,7 @@ carry ``TypeNumber``/``SubTypeNumber`` and a correct ``ObjectSize``.
 
 Example:
     knxproj-to-kaenx --input project.knxproj --template empty.ae-manu \\
-        --device 'bridge=KNX-NATS-Bridge:split' --write-gas consumed.txt \\
+        --device '@bridge-gas.txt=KNX-NATS-Bridge:split' --write-gas consumed.txt \\
         --device 'basalte=Basalte Core S4:both' --output-dir out/
 """
 
@@ -187,9 +195,15 @@ _GA_RE = re.compile(r"^(\d{1,2})/(\d)/(\d{1,3})$")
 
 @dataclass(frozen=True)
 class DeviceSpec:
-    """One ``--device PATTERN=NAME:MODE`` argument, parsed."""
+    """One ``--device SOURCE=NAME:MODE`` argument, parsed.
 
-    pattern: str
+    ``source`` is either a pattern selecting ETS device(s) or, prefixed
+    with ``@``, a file listing the group addresses directly — for a
+    device whose true footprint lives in configuration rather than in
+    the ETS project.
+    """
+
+    source: str
     name: str
     mode: str  # "split" | "both"
     app_number: int
@@ -208,20 +222,21 @@ class DeviceReport:
     transmit: int = 0
     skipped: list[tuple[str, str]] = field(default_factory=list)  # (ga, reason)
     unmatched_write_gas: list[str] = field(default_factory=list)
+    missing: list[str] = field(default_factory=list)  # listed in a @file, absent from ETS
 
 
 def parse_device_spec(raw: str, app_number: int) -> DeviceSpec:
-    """``PATTERN=NAME:MODE`` -> DeviceSpec. NAME may contain colons-free text."""
-    pattern, sep, rest = raw.partition("=")
+    """``SOURCE=NAME:MODE`` -> DeviceSpec. NAME may contain colons-free text."""
+    source, sep, rest = raw.partition("=")
     name, sep2, mode = rest.rpartition(":")
-    if not sep or not sep2 or not pattern.strip() or not name.strip():
-        raise SystemExit(f"invalid --device {raw!r}: expected PATTERN=NAME:MODE")
+    if not sep or not sep2 or not source.strip() or not name.strip():
+        raise SystemExit(f"invalid --device {raw!r}: expected SOURCE=NAME:MODE")
     if mode not in ("split", "both"):
         raise SystemExit(f"invalid --device {raw!r}: mode must be 'split' or 'both'")
-    return DeviceSpec(pattern=pattern.strip(), name=name.strip(), mode=mode, app_number=app_number)
+    return DeviceSpec(source=source.strip(), name=name.strip(), mode=mode, app_number=app_number)
 
 
-def read_write_gas(text: str) -> frozenset[str]:
+def read_ga_list(text: str, origin: str) -> frozenset[str]:
     """One address per line, as ``M/C/S`` or NATS subject ``<prefix>.M.C.S``."""
     gas: set[str] = set()
     for raw in text.splitlines():
@@ -231,7 +246,7 @@ def read_write_gas(text: str) -> frozenset[str]:
         if "/" not in line:
             line = "/".join(line.split(".")[-3:])
         if not _GA_RE.match(line):
-            raise SystemExit(f"--write-gas: {raw.strip()!r} is not a group address")
+            raise SystemExit(f"{origin}: {raw.strip()!r} is not a group address")
         gas.add(line)
     return frozenset(gas)
 
@@ -441,17 +456,26 @@ def build_device_model(
     language = dict(application["Languages"][0])
     report = DeviceReport()
 
-    gas = device_group_addresses(project_data, spec.pattern)
-    if not gas:
-        available = sorted(
-            f"{addr} {device.get('name') or device.get('hardware_name') or ''}".strip()
-            for addr, device in (project_data.get("devices", {}) or {}).items()
-            if isinstance(device, dict)
-        )
-        raise SystemExit(
-            f"--device {spec.pattern!r} matches no device carrying group addresses; "
-            "devices in the project:\n  " + "\n  ".join(available)
-        )
+    if spec.source.startswith("@"):
+        path = Path(spec.source[1:])
+        listed = read_ga_list(path.read_text(encoding="utf-8"), origin=str(path))
+        if not listed:
+            raise SystemExit(f"--device {spec.name}: {path} lists no group addresses")
+        all_gas = project_data.get("group_addresses", {}) or {}
+        gas = {ga: all_gas[ga] for ga in listed if isinstance(all_gas.get(ga), dict)}
+        report.missing = sorted(listed - set(gas), key=_ga_sort_key)
+    else:
+        gas = device_group_addresses(project_data, spec.source)
+        if not gas:
+            available = sorted(
+                f"{addr} {device.get('name') or device.get('hardware_name') or ''}".strip()
+                for addr, device in (project_data.get("devices", {}) or {}).items()
+                if isinstance(device, dict)
+            )
+            raise SystemExit(
+                f"--device {spec.source!r} matches no device carrying group addresses; "
+                "devices in the project:\n  " + "\n  ".join(available)
+            )
 
     com_objects: list[dict[str, Any]] = []
     for ga in sorted(gas, key=_ga_sort_key):
@@ -536,14 +560,18 @@ def main(argv: list[str] | None = None) -> int:
         "--device",
         action="append",
         required=True,
-        metavar="PATTERN=NAME:MODE",
+        metavar="SOURCE=NAME:MODE",
         help=(
-            "Device to generate: PATTERN selects the source device(s) by "
+            "Device to generate: SOURCE selects the source device(s) by "
             "case-insensitive substring against name, manufacturer and hardware "
-            "name; NAME names the generated product; MODE is 'split' (Write on "
-            "--write-gas addresses, Transmit+Read otherwise) or 'both' "
-            "(Write+Transmit on everything). Repeatable; the application number "
-            "is 100 plus the argument's position, so keep the order stable."
+            "name, by individual address (1.1.240), or — prefixed with @ — names "
+            "a file listing the group addresses directly (one address or NATS "
+            "subject per line), for a device whose footprint is defined by "
+            "configuration rather than by the ETS project; NAME names the "
+            "generated product; MODE is 'split' (Write on --write-gas addresses, "
+            "Transmit+Read otherwise) or 'both' (Write+Transmit on everything). "
+            "Repeatable; the application number is 100 plus the argument's "
+            "position, so keep the order stable."
         ),
     )
     parser.add_argument(
@@ -578,7 +606,7 @@ def main(argv: list[str] | None = None) -> int:
 
     write_gas = frozenset[str]()
     if args.write_gas is not None:
-        write_gas = read_write_gas(args.write_gas.read_text(encoding="utf-8"))
+        write_gas = read_ga_list(args.write_gas.read_text(encoding="utf-8"), origin="--write-gas")
     elif any(s.mode == "split" for s in specs):
         raise SystemExit("--write-gas is required when a device uses mode 'split'")
 
@@ -606,6 +634,14 @@ def main(argv: list[str] | None = None) -> int:
             logger.warning(
                 "%s: skipped %s: %s — it stays on the placeholder", spec.name, ga, reason
             )
+        for ga in report.missing:
+            logger.warning(
+                "%s: listed address %s does not exist in the ETS project — the "
+                "configuration points at nothing",
+                spec.name,
+                ga,
+            )
+            failed = True
         for ga in report.unmatched_write_gas:
             logger.warning(
                 "%s: consumed address %s is not on the source device — a NATS "
