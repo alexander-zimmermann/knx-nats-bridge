@@ -213,6 +213,11 @@ def test_split_mode_collectors() -> None:
         False,
         False,
     )
+    # All of this collector's addresses share DPST 1.001, so ETS gets
+    # the exact type; the mixed collector above stays at the main type.
+    assert consumed["HasDpts"] is True
+    assert consumed["SubTypeNumber"] == "1"
+    assert mirrored["SubTypeNumber"] is None
     assert report.write == 1
     assert report.transmit == 2
 
