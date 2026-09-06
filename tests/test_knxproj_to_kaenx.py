@@ -186,19 +186,30 @@ def test_split_mode_collectors() -> None:
     model, report = _build()
     objects = model["Application"]["ComObjects"]
 
-    # 0/2/10 and 0/3/2 share the (Zentral, DPT 9, transmit) collector;
-    # 4/2/60 lands on its own write collector. 0/3/0 and 0/3/1 are
-    # skipped (no DPT / DPT unknown to Kaenx-Creator).
-    assert [o["Name"] for o in objects] == ["hg0-dpt9-transmit", "hg4-dpt1-write"]
-    assert report.objects == 2
+    # One collector per (main group, datapoint type, direction): 0/3/2's
+    # subtype is unknown to Kaenx-Creator, so it joins the 9.xxx
+    # main-type collector, which sorts before the 9.001 one. 0/3/0 and
+    # 0/3/1 are skipped (no DPT / DPT unknown to Kaenx-Creator).
+    assert [o["Name"] for o in objects] == [
+        "hg0-dpt9.xxx-transmit",
+        "hg0-dpt9.001-transmit",
+        "hg4-dpt1.001-write",
+    ]
+    assert report.objects == 3
     assert report.links == 3
     assert [ga for ga, _ in report.skipped] == ["0/3/0", "0/3/1"]
 
-    mirrored = objects[0]
-    assert mirrored["Text"][0]["Text"] == "Zentral · 9.xxx · sendet"
+    fallback = objects[0]
+    assert fallback["Text"][0]["Text"] == "Zentral · 9.xxx · sendet"
+    assert fallback["HasDpts"] is False
+    assert fallback["SubTypeNumber"] is None
+
+    mirrored = objects[1]
+    assert mirrored["Text"][0]["Text"] == "Zentral · 9.001 · sendet"
     assert mirrored["FunctionText"][0]["Text"] == "sendet auf den Bus"
     assert mirrored["TypeNumber"] == "9"
-    assert mirrored["HasDpts"] is False
+    assert mirrored["HasDpts"] is True
+    assert mirrored["SubTypeNumber"] == "1"
     assert mirrored["ObjectSize"] == 16
     assert (mirrored["FlagWrite"], mirrored["FlagTrans"], mirrored["FlagRead"]) == (
         False,
@@ -206,8 +217,8 @@ def test_split_mode_collectors() -> None:
         True,
     )
 
-    consumed = objects[1]
-    assert consumed["Text"][0]["Text"] == "Bordbar · 1.xxx · empfängt"
+    consumed = objects[2]
+    assert consumed["Text"][0]["Text"] == "Bordbar · 1.001 · empfängt"
     assert (consumed["FlagWrite"], consumed["FlagTrans"], consumed["FlagRead"]) == (
         True,
         False,
@@ -216,16 +227,18 @@ def test_split_mode_collectors() -> None:
     assert report.write == 1
     assert report.transmit == 2
 
-    assert report.collectors[0].entries == [
-        ("0/2/10", "Sensors.1F.Bedroom.Temperature"),
-        ("0/3/2", "Odd.SubType"),
-    ]
+    assert report.collectors[0].entries == [("0/3/2", "Odd.SubType")]
+    assert report.collectors[1].entries == [("0/2/10", "Sensors.1F.Bedroom.Temperature")]
 
 
 def test_both_mode_collectors() -> None:
     model, report = _build(mode="both", write_gas=frozenset())
     objects = model["Application"]["ComObjects"]
-    assert [o["Name"] for o in objects] == ["hg0-dpt9-both", "hg4-dpt1-both"]
+    assert [o["Name"] for o in objects] == [
+        "hg0-dpt9.xxx-both",
+        "hg0-dpt9.001-both",
+        "hg4-dpt1.001-both",
+    ]
     for obj in objects:
         assert obj["FlagWrite"] is True
         assert obj["FlagTrans"] is True
@@ -242,7 +255,7 @@ def test_refs_and_dynamics_group_by_main_group() -> None:
 
     blocks = app["Dynamics"][0]["Items"][0]["Items"]
     assert [b["Text"][0]["Text"] for b in blocks] == ["0 · Zentral", "4 · Bordbar"]
-    assert [[d["ComObjectRef"] for d in b["Items"]] for b in blocks] == [[1], [2]]
+    assert [[d["ComObjectRef"] for d in b["Items"]] for b in blocks] == [[1, 2], [3]]
 
 
 def test_identity_fields_and_deterministic_guid() -> None:
@@ -254,7 +267,7 @@ def test_identity_fields_and_deterministic_guid() -> None:
     # Application.Number is the version byte, not the identity — the
     # template's V 1.0 must survive.
     assert model["Application"]["Number"] == 16
-    assert model["Application"]["HighestComNumber"] == 2
+    assert model["Application"]["HighestComNumber"] == 3
 
     again, _ = _build()
     assert again["Guid"] == model["Guid"]
@@ -314,7 +327,7 @@ def test_file_source_builds_from_listed_addresses(tmp_path: Any) -> None:
 
     objects = model["Application"]["ComObjects"]
     # Listed addresses only — regardless of which ETS device carries them.
-    assert [o["Name"] for o in objects] == ["hg0-dpt1-transmit", "hg4-dpt1-write"]
+    assert [o["Name"] for o in objects] == ["hg0-dpt1.001-transmit", "hg4-dpt1.001-write"]
     # An address the configuration lists but ETS does not know is the
     # wiring error class this modelling exists to expose.
     assert report.missing == ["9/9/9"]
@@ -332,8 +345,8 @@ def test_wiring_worksheet_lists_addresses_per_collector() -> None:
     spec = parse_device_spec("bridge placeholder=KNX-NATS-Bridge:split", 100)
     _, report = _build()
     sheet = wiring_worksheet(spec, report)
-    assert "## Objekt 1: Zentral · 9.xxx · sendet (2 GAs)" in sheet
+    assert "## Objekt 2: Zentral · 9.001 · sendet (1 GAs)" in sheet
     assert "- [ ] `0/2/10` Sensors.1F.Bedroom.Temperature" in sheet
-    assert "## Objekt 2: Bordbar · 1.xxx · empfängt (1 GAs)" in sheet
+    assert "## Objekt 3: Bordbar · 1.001 · empfängt (1 GAs)" in sheet
     assert "## Nicht aufgenommen" in sheet
     assert "- `0/3/0` — no DPT assigned in ETS" in sheet

@@ -8,9 +8,10 @@ project (.ae-manu) per device. Kaenx-Creator (Windows) then exports the
 .knxprod that ETS imports.
 
 Objects are **collectors**: one communication object per main group and
-datapoint main type (and, on a ``split`` device, per direction), so a
-device carries a few dozen objects and every group address of a kind
-is linked to the same object with one multi-select in ETS. A wiring
+datapoint type — the exact subtype where ETS declares one, the main
+type for the rest — and, on a ``split`` device, per direction. A device
+carries a few dozen objects and every group address of a kind is
+linked to the same object with one multi-select in ETS. A wiring
 worksheet emitted beside each project lists, per object, exactly which
 addresses belong on it.
 
@@ -79,6 +80,213 @@ _DPT_SIZE_BITS: dict[int, int] = {
 }
 # fmt: on
 
+# Known subtype numbers per main type, same source. Collectors are cut
+# per subtype so ETS shows the exact unit; an address whose subtype
+# Kaenx-Creator does not know joins the main-type collector, because a
+# subtype the target application cannot re-link would fail its load.
+_DPT_SUBTYPES: dict[int, frozenset[int]] = {
+    1: frozenset(
+        {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 24, 100}
+    ),
+    2: frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}),
+    3: frozenset({7, 8}),
+    4: frozenset({1, 2}),
+    5: frozenset({1, 3, 4, 5, 6, 10, 100}),
+    6: frozenset({1, 10, 20}),
+    7: frozenset({1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13, 600}),
+    8: frozenset({1, 2, 3, 4, 5, 6, 7, 10, 11, 12}),
+    9: frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30}),
+    10: frozenset({1}),
+    11: frozenset({1}),
+    12: frozenset({1, 100, 101, 102, 1200, 1201}),
+    13: frozenset({1, 2, 10, 11, 12, 13, 14, 15, 16, 100, 1200, 1201}),
+    14: frozenset(
+        {
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52,
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60,
+            61,
+            62,
+            63,
+            64,
+            65,
+            66,
+            67,
+            68,
+            69,
+            70,
+            71,
+            72,
+            73,
+            74,
+            75,
+            76,
+            77,
+            78,
+            79,
+            1200,
+            1201,
+        }
+    ),
+    15: frozenset({0}),
+    16: frozenset({0, 1}),
+    17: frozenset({1}),
+    18: frozenset({1}),
+    19: frozenset({1}),
+    20: frozenset(
+        {
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            11,
+            12,
+            13,
+            14,
+            17,
+            20,
+            21,
+            22,
+            100,
+            101,
+            102,
+            103,
+            104,
+            105,
+            106,
+            107,
+            108,
+            109,
+            110,
+            111,
+            112,
+            113,
+            114,
+            115,
+            116,
+            120,
+            121,
+            122,
+            600,
+            601,
+            602,
+            603,
+            604,
+            605,
+            606,
+            607,
+            608,
+            609,
+            610,
+            611,
+            801,
+            802,
+            803,
+            804,
+            1000,
+            1001,
+            1002,
+            1003,
+        }
+    ),
+    21: frozenset({1, 2, 100, 101, 102, 103, 104, 105, 106, 107, 601, 1000, 1001, 1010}),
+    22: frozenset({100, 101, 102, 103, 1000, 1010}),
+    23: frozenset({1, 2, 3, 102}),
+    25: frozenset({1000}),
+    26: frozenset({1}),
+    27: frozenset({1}),
+    29: frozenset({10, 11, 12}),
+    30: frozenset({1010}),
+    206: frozenset({100, 102, 104, 105}),
+    217: frozenset({1}),
+    219: frozenset({1}),
+    222: frozenset({100, 101}),
+    225: frozenset({1, 2}),
+    229: frozenset({1}),
+    230: frozenset({1000}),
+    232: frozenset({600}),
+    234: frozenset({1}),
+    235: frozenset({1}),
+    236: frozenset({1}),
+    237: frozenset({600}),
+    238: frozenset({600}),
+    240: frozenset({800}),
+    241: frozenset({800}),
+    242: frozenset({600}),
+    244: frozenset({600}),
+    245: frozenset({600}),
+    246: frozenset({600}),
+    249: frozenset({600}),
+    250: frozenset({600}),
+    251: frozenset({600}),
+    252: frozenset({600}),
+    254: frozenset({600}),
+    255: frozenset({1}),
+    275: frozenset({100, 101}),
+}
+
 _GA_RE = re.compile(r"^(\d{1,2})/(\d)/(\d{1,3})$")
 
 # Direction of a collector object, in bus terms: displayed function
@@ -116,9 +324,16 @@ class Collector:
 
     main_group: int
     dpt_main: int
+    dpt_sub: int | None  # None collects the addresses without a (known) subtype
     direction: str  # key into _DIRECTIONS
     text: str = ""
     entries: list[tuple[str, str]] = field(default_factory=list)  # (ga, ETS name)
+
+    @property
+    def dpt_label(self) -> str:
+        if self.dpt_sub is None:
+            return f"{self.dpt_main}.xxx"
+        return f"{self.dpt_main}.{self.dpt_sub:03d}"
 
 
 @dataclass
@@ -232,11 +447,12 @@ def _translation(language: Mapping[str, Any], text: str) -> dict[str, Any]:
 
 def _com_object(number: int, collector: Collector, language: Mapping[str, Any]) -> dict[str, Any]:
     function_text, flags = _DIRECTIONS[collector.direction]
+    sub = collector.dpt_sub
     return {
         "$type": f"Kaenx.Creator.Models.ComObject, {_SHARE}",
         "UId": number,
         "Id": number,
-        "Name": f"hg{collector.main_group}-dpt{collector.dpt_main}-{collector.direction}",
+        "Name": f"hg{collector.main_group}-dpt{collector.dpt_label}-{collector.direction}",
         "Text": [_translation(language, collector.text)],
         "TranslationText": False,
         "FunctionText": [_translation(language, function_text)],
@@ -250,9 +466,9 @@ def _com_object(number: int, collector: Collector, language: Mapping[str, Any]) 
         "FlagOnInit": False,
         "TypeValue": None,
         "HasDpt": True,
-        "HasDpts": False,
+        "HasDpts": sub is not None,
         "ObjectSize": _DPT_SIZE_BITS[collector.dpt_main],
-        "SubTypeNumber": None,
+        "SubTypeNumber": str(sub) if sub is not None else None,
         "SubType": None,
         "TypeNumber": str(collector.dpt_main),
         "Type": None,
@@ -451,7 +667,7 @@ def build_device_model(
             )
 
     hg_names = _main_group_names(project_data)
-    collectors: dict[tuple[int, int, str], Collector] = {}
+    collectors: dict[tuple[int, int, int | None, str], Collector] = {}
     for ga in sorted(gas, key=_ga_sort_key):
         info = gas[ga]
         dpt = info.get("dpt")
@@ -470,9 +686,16 @@ def build_device_model(
         else:
             direction = "transmit"
         main_group = int(ga.split("/")[0])
-        key = (main_group, int(main), direction)
+        raw_sub = dpt.get("sub") if isinstance(dpt, dict) else None
+        sub = int(raw_sub) if raw_sub is not None else None
+        if sub is not None and sub not in _DPT_SUBTYPES.get(int(main), frozenset()):
+            # A subtype Kaenx-Creator cannot re-link would fail its load;
+            # the address joins the main-type collector instead.
+            sub = None
+        key = (main_group, int(main), sub, direction)
         collector = collectors.setdefault(
-            key, Collector(main_group=main_group, dpt_main=int(main), direction=direction)
+            key,
+            Collector(main_group=main_group, dpt_main=int(main), dpt_sub=sub, direction=direction),
         )
         collector.entries.append((ga, str(info.get("name") or "")))
         report.links += 1
@@ -481,18 +704,24 @@ def build_device_model(
     if spec.mode == "split":
         report.unmatched_write_gas = sorted(write_gas - set(gas), key=_ga_sort_key)
 
-    # Stable object order: main group, datapoint type, sending before
-    # receiving — so a regeneration keeps the numbers and existing ETS
-    # links survive an application update.
+    # Stable object order: main group, datapoint type (main-type
+    # collector before its subtypes), sending before receiving — so a
+    # regeneration keeps the numbers and existing ETS links survive an
+    # application update.
     ordered = sorted(
         collectors.values(),
-        key=lambda c: (c.main_group, c.dpt_main, c.direction == "write"),
+        key=lambda c: (
+            c.main_group,
+            c.dpt_main,
+            -1 if c.dpt_sub is None else c.dpt_sub,
+            c.direction == "write",
+        ),
     )
     com_objects: list[dict[str, Any]] = []
     for number, collector in enumerate(ordered, start=1):
         hg_name = hg_names.get(collector.main_group, f"Hauptgruppe {collector.main_group}")
         suffix = {"write": " · empfängt", "transmit": " · sendet"}.get(collector.direction, "")
-        collector.text = f"{hg_name} · {collector.dpt_main}.xxx{suffix}"
+        collector.text = f"{hg_name} · {collector.dpt_label}{suffix}"
         com_objects.append(_com_object(number, collector, language))
     report.objects = len(com_objects)
     report.collectors = ordered
