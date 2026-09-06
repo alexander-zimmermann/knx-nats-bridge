@@ -269,6 +269,32 @@ def test_catalog_keeps_numbered_sections_only() -> None:
     assert [i["Name"] for i in items[0]["Items"]] == ["hardware"]
 
 
+def test_catalog_section_rename() -> None:
+    spec = parse_device_spec("bridge placeholder=KNX-NATS-Bridge:split", 100)
+    model, _ = build_device_model(
+        _template(), spec, _project_data(), frozenset({"4/2/60"}), catalog_section="Steinroth"
+    )
+    section = model["Catalog"][0]["Items"][0]
+    assert section["Name"] == section["Number"] == "Steinroth"
+    assert section["Text"][0]["Text"] == "Steinroth"
+
+
+def test_app_version_bumps_above_imported() -> None:
+    data = _project_data()
+    # The generated device as ETS knows it today: order number = slug,
+    # application id carrying version 0x11 = V 1.1.
+    data["devices"]["1.1.162"] = {
+        "name": "KNX-NATS-Bridge",
+        "order_number": "KNX-NATS-BRIDGE",
+        "application": "M-00FA_A-AF66-11-0000",
+    }
+    spec = parse_device_spec("bridge placeholder=KNX-NATS-Bridge:split", 100)
+    model, report = build_device_model(_template(), spec, data, frozenset({"4/2/60"}))
+    assert model["Application"]["Number"] == 0x12
+    assert report.app_version == 0x12
+    assert model["Application"]["NameText"] == "V 1.2 KNX-NATS-Bridge"
+
+
 def test_unmatched_write_gas_is_reported() -> None:
     _, report = _build(write_gas=frozenset({"4/2/60", "7/7/7"}))
     assert report.unmatched_write_gas == ["7/7/7"]
