@@ -85,7 +85,10 @@ def test_all_finding_classes(tmp_path: Path) -> None:
         (2, [("2/0/1", "Schalten.Zentral")])
     ]
     assert report.open_links == 1
+    # 15/6/25 is consumed but sits on the sending collector: the Write
+    # flag is missing and the Transmit flag is one it must not carry.
     assert report.misflagged == [("15/6/25", "write")]
+    assert report.cross_linked == [("15/6/25", "transmit")]
     assert report.extra == [("9/9/9", "Alt.Verwaist")]
     assert report.missing_from_ets == ["7/7/7"]
     assert not report.clean
@@ -93,9 +96,42 @@ def test_all_finding_classes(tmp_path: Path) -> None:
     sheet = todo_worksheet(spec, report)
     assert "## Objekt 2: Schalten · 1.001 · sendet (1 von 1 offen)" in sheet
     assert "- [ ] `2/0/1` Schalten.Zentral" in sheet
-    assert "- `15/6/25` — braucht Schreiben (empfängt)" in sheet
+    assert "- `15/6/25` — gehört auf das empfängt-Objekt" in sheet
+    assert "- `15/6/25` — hängt auch am sendet-Objekt" in sheet
     assert "- `9/9/9` Alt.Verwaist" in sheet
     assert "- `7/7/7`" in sheet
+
+
+def test_cross_link_beside_the_correct_one_is_caught(tmp_path: Path) -> None:
+    """A status address dropped on the receiving collector as well.
+
+    The wanted flag is present, so the old check passed it — while the
+    catalog turned the address writable off the stray Write flag.
+    """
+    data = _project_data()
+    data["group_addresses"]["0/0/251"]["communication_object_ids"] = ["co-t", "co-w"]
+    ga_file = tmp_path / "footprint.txt"
+    ga_file.write_text("0/0/251\n", encoding="utf-8")
+    spec = parse_device_spec(f"@{ga_file}=KNX-NATS-Bridge:split", 100)
+    report = check_device(data, spec, frozenset())
+
+    assert report.todo == []
+    assert report.misflagged == []
+    assert report.cross_linked == [("0/0/251", "write")]
+    assert not report.clean
+
+
+def test_both_mode_device_cannot_cross_link(tmp_path: Path) -> None:
+    data = _project_data()
+    data["group_addresses"]["0/0/251"]["communication_object_ids"] = ["co-t", "co-w"]
+    ga_file = tmp_path / "footprint.txt"
+    ga_file.write_text("0/0/251\n", encoding="utf-8")
+    spec = parse_device_spec(f"@{ga_file}=KNX-NATS-Bridge:both", 100)
+    report = check_device(data, spec, frozenset())
+
+    # Its collectors carry both directions, so neither flag is forbidden.
+    assert report.cross_linked == []
+    assert report.misflagged == []
 
 
 def test_findings_only_what_is_wrong(tmp_path: Path) -> None:
