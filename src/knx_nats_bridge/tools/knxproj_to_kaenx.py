@@ -631,20 +631,18 @@ def _numbered_items(items: list[Any]) -> list[Any]:
     return kept
 
 
-def build_device_model(
-    template: Mapping[str, Any],
+def build_collectors(
     spec: DeviceSpec,
     project_data: Mapping[str, Any],
     write_gas: frozenset[str],
-    catalog_section: str | None = None,
-) -> tuple[dict[str, Any], DeviceReport]:
-    """Fill a copy of the template with one collector object per
-    (main group, datapoint main type, direction)."""
-    model = copy.deepcopy(dict(template))
-    application = model["Application"]
-    language = dict(application["Languages"][0])
-    report = DeviceReport()
+    report: DeviceReport,
+) -> list[Collector]:
+    """Resolve the device's addresses and group them into the ordered,
+    numbered collector list; counts and gaps land on ``report``.
 
+    Shared between generation and the wiring check so both see the
+    identical objects — same cut, same order, same numbers.
+    """
     if spec.source.startswith("@"):
         path = Path(spec.source[1:])
         listed = read_ga_list(path.read_text(encoding="utf-8"), origin=str(path))
@@ -717,16 +715,37 @@ def build_device_model(
             c.direction == "write",
         ),
     )
-    com_objects: list[dict[str, Any]] = []
-    for number, collector in enumerate(ordered, start=1):
+    for collector in ordered:
         hg_name = hg_names.get(collector.main_group, f"Hauptgruppe {collector.main_group}")
         suffix = {"write": " · empfängt", "transmit": " · sendet"}.get(collector.direction, "")
         collector.text = f"{hg_name} · {collector.dpt_label}{suffix}"
-        com_objects.append(_com_object(number, collector, language))
-    report.objects = len(com_objects)
+    report.objects = len(ordered)
     report.collectors = ordered
+    return ordered
+
+
+def build_device_model(
+    template: Mapping[str, Any],
+    spec: DeviceSpec,
+    project_data: Mapping[str, Any],
+    write_gas: frozenset[str],
+    catalog_section: str | None = None,
+) -> tuple[dict[str, Any], DeviceReport]:
+    """Fill a copy of the template with one collector object per
+    (main group, datapoint type, direction)."""
+    model = copy.deepcopy(dict(template))
+    application = model["Application"]
+    language = dict(application["Languages"][0])
+    report = DeviceReport()
+
+    ordered = build_collectors(spec, project_data, write_gas, report)
+    com_objects = [
+        _com_object(number, collector, language)
+        for number, collector in enumerate(ordered, start=1)
+    ]
 
     refs = [_com_object_ref(co, language) for co in com_objects]
+    hg_names = _main_group_names(project_data)
     blocks: list[dict[str, Any]] = []
     for main_group in sorted({c.main_group for c in ordered}):
         block_refs = [
