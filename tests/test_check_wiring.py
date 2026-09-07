@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
-import pytest
-
-from knx_nats_bridge.tools.check_wiring import check_device, parse_check_spec
+from knx_nats_bridge.tools.check_wiring import check_device, todo_worksheet
+from knx_nats_bridge.tools.knxproj_to_kaenx import parse_device_spec
 
 
 def _project_data() -> dict[str, Any]:
-    """A wired bridge device as xknxproject's parse() shape delivers it."""
+    """A partially wired bridge device as xknxproject's parse() delivers it."""
 
     def co(device: str, write: bool = False, transmit: bool = False) -> dict[str, Any]:
         return {
@@ -21,15 +21,38 @@ def _project_data() -> dict[str, Any]:
     return {
         "group_addresses": {
             # Writer target, correctly on a Transmit collector.
-            "0/0/251": {"communication_object_ids": ["co-t"]},
+            "0/0/251": {
+                "name": "Zentral.Fault",
+                "dpt": {"main": 1, "sub": 1},
+                "communication_object_ids": ["co-t"],
+            },
             # Consumed address, correctly on a Write collector.
-            "4/2/60": {"communication_object_ids": ["co-w"]},
+            "4/2/60": {
+                "name": "Bordbar.OnOff",
+                "dpt": {"main": 1, "sub": 1},
+                "communication_object_ids": ["co-w"],
+            },
             # Consumed address linked to a Transmit collector: misflagged.
-            "15/6/25": {"communication_object_ids": ["co-t"]},
+            "15/6/25": {
+                "name": "Wallbox.ModusPV",
+                "dpt": {"main": 1, "sub": 1},
+                "communication_object_ids": ["co-t"],
+            },
             # Linked to the device, but no configuration claims it.
-            "9/9/9": {"communication_object_ids": ["co-t"]},
-            # Exists in ETS, in the footprint, but linked elsewhere only.
-            "2/0/1": {"communication_object_ids": ["co-other"]},
+            "9/9/9": {
+                "name": "Alt.Verwaist",
+                "dpt": {"main": 1, "sub": 1},
+                "communication_object_ids": ["co-t"],
+            },
+            # In the footprint, exists in ETS, but linked elsewhere only.
+            "2/0/1": {
+                "name": "Schalten.Zentral",
+                "dpt": {"main": 1, "sub": 1},
+                "communication_object_ids": ["co-other"],
+            },
+        },
+        "group_ranges": {
+            "2": {"name": "Schalten", "group_ranges": {}},
         },
         "communication_objects": {
             "co-t": co("1.1.162", transmit=True),
@@ -43,51 +66,52 @@ def _project_data() -> dict[str, Any]:
     }
 
 
-def _check(footprint: set[str], write_gas: set[str] | None = None) -> Any:
-    spec = parse_check_spec("KNX-NATS-Bridge=@unused.txt")
-    if write_gas is None:
-        write_gas = {"4/2/60", "15/6/25"}
-    return check_device(_project_data(), spec, frozenset(footprint), frozenset(write_gas))
+def _check(tmp_path: Path, footprint: list[str], write_gas: set[str]) -> Any:
+    ga_file = tmp_path / "footprint.txt"
+    ga_file.write_text("\n".join(footprint) + "\n", encoding="utf-8")
+    spec = parse_device_spec(f"@{ga_file}=KNX-NATS-Bridge:split", 100)
+    return spec, check_device(_project_data(), spec, frozenset(write_gas))
 
 
-def test_parse_check_spec() -> None:
-    spec = parse_check_spec("Basalte Core S4=@/tmp/basalte.txt")
-    assert spec.name == "Basalte Core S4"
-    assert spec.slug == "BASALTE-CORE-S4"
-    assert str(spec.footprint_path) == "/tmp/basalte.txt"
+def test_all_finding_classes(tmp_path: Path) -> None:
+    spec, report = _check(
+        tmp_path,
+        ["0/0/251", "4/2/60", "15/6/25", "2/0/1", "7/7/7"],
+        {"4/2/60", "15/6/25"},
+    )
+    # 2/0/1 exists in ETS but is linked to another device only: it is
+    # the one open link, on its collector with the generated number.
+    assert [(number, entries) for number, _, entries in report.todo] == [
+        (2, [("2/0/1", "Schalten.Zentral")])
+    ]
+    assert report.open_links == 1
+    assert report.misflagged == [("15/6/25", "write")]
+    assert report.extra == [("9/9/9", "Alt.Verwaist")]
+    assert report.missing_from_ets == ["7/7/7"]
+    assert not report.clean
+
+    sheet = todo_worksheet(spec, report)
+    assert "## Objekt 2: Schalten · 1.001 · sendet (1 von 1 offen)" in sheet
+    assert "- [ ] `2/0/1` Schalten.Zentral" in sheet
+    assert "- `15/6/25` — braucht Schreiben (empfängt)" in sheet
+    assert "- `9/9/9` Alt.Verwaist" in sheet
+    assert "- `7/7/7`" in sheet
 
 
-@pytest.mark.parametrize("raw", ["no-equals", "Name=plainfile.txt", "=@x", "Name=@"])
-def test_parse_check_spec_rejects(raw: str) -> None:
-    with pytest.raises(SystemExit):
-        parse_check_spec(raw)
-
-
-def test_clean_wiring_passes() -> None:
-    report = _check({"0/0/251", "4/2/60"}, write_gas={"4/2/60"})
-    # 15/6/25 and 9/9/9 are linked but not in this footprint -> extra.
-    assert report.missing == []
-    assert report.extra == ["9/9/9", "15/6/25"]
+def test_findings_only_what_is_wrong(tmp_path: Path) -> None:
+    _, report = _check(tmp_path, ["0/0/251", "4/2/60"], {"4/2/60"})
+    assert report.todo == []
     assert report.misflagged == []
-
-
-def test_all_finding_classes() -> None:
-    report = _check({"0/0/251", "4/2/60", "15/6/25", "2/0/1"})
-    # 2/0/1 exists in ETS but is linked to another device only.
-    assert report.missing == ["2/0/1"]
-    assert report.extra == ["9/9/9"]
-    # Consumed 15/6/25 sits on a Transmit-only collector.
-    assert report.misflagged == ["15/6/25"]
+    assert report.missing_from_ets == []
+    # The two device links no source claims any more.
+    assert [ga for ga, _ in report.extra] == ["9/9/9", "15/6/25"]
     assert not report.clean
 
 
-def test_footprint_address_absent_from_ets_is_missing() -> None:
-    report = _check({"0/0/251", "4/2/60", "7/7/7"}, write_gas={"4/2/60"})
-    assert "7/7/7" in report.missing
-
-
-def test_unimported_device_is_reported() -> None:
-    spec = parse_check_spec("Ghost=@unused.txt")
-    report = check_device(_project_data(), spec, frozenset({"1/1/1"}), frozenset())
+def test_unimported_device_is_reported(tmp_path: Path) -> None:
+    ga_file = tmp_path / "footprint.txt"
+    ga_file.write_text("1/1/1\n", encoding="utf-8")
+    spec = parse_device_spec(f"@{ga_file}=Ghost:both", 100)
+    report = check_device(_project_data(), spec, frozenset())
     assert report.device_found is False
     assert not report.clean
