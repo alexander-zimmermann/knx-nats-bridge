@@ -14,10 +14,14 @@ Findings, per device:
   configuration pointing at nothing.
 - **extra** — linked to the device in ETS, but no configuration claims
   it. Left over from an earlier footprint, or wired by mistake.
-- **misflagged** — linked, but to an object whose flags contradict the
-  direction: a consumed address (``--write-gas``) needs a Write-flagged
-  object, everything else a Transmit-flagged one. Devices whose
-  collectors carry both flags always pass.
+- **misflagged** — linked, but to an object without the flag its
+  direction needs: a consumed address (``--write-gas``) needs a
+  Write-flagged object, everything else a Transmit-flagged one.
+- **cross-linked** — linked to an object of the *opposite* direction as
+  well. The wanted flag being present is not enough: a status address
+  that also hangs on the receiving collector makes the catalog call it
+  writable, which is the very claim this model exists to keep honest.
+  Devices whose collectors carry both directions cannot hit this.
 
 Any finding fails the run. A footprint device that does not exist in
 the project yet (matched by order number, which the generator sets to
@@ -46,6 +50,7 @@ from pathlib import Path
 from typing import Any
 
 from knx_nats_bridge.tools.knxproj_to_kaenx import (
+    _DIRECTIONS,
     Collector,
     DeviceReport,
     DeviceSpec,
@@ -76,7 +81,8 @@ class CheckReport:
     missing_from_ets: list[str] = field(default_factory=list)  # in a footprint, not in ETS
     skipped: list[tuple[str, str]] = field(default_factory=list)  # (ga, reason), unmodellable
     extra: list[tuple[str, str]] = field(default_factory=list)  # (ga, ETS name)
-    misflagged: list[tuple[str, str]] = field(default_factory=list)  # (ga, wanted flag)
+    misflagged: list[tuple[str, str]] = field(default_factory=list)  # (ga, missing flag)
+    cross_linked: list[tuple[str, str]] = field(default_factory=list)  # (ga, forbidden flag)
 
     @property
     def open_links(self) -> int:
@@ -85,7 +91,12 @@ class CheckReport:
     @property
     def clean(self) -> bool:
         return self.device_found and not (
-            self.todo or self.missing_from_ets or self.extra or self.misflagged or self.skipped
+            self.todo
+            or self.missing_from_ets
+            or self.extra
+            or self.misflagged
+            or self.cross_linked
+            or self.skipped
         )
 
 
@@ -150,15 +161,19 @@ def check_device(
 
     footprint: set[str] = set()
     for number, collector in enumerate(collectors, start=1):
+        expected = _DIRECTIONS[collector.direction][1]
         open_entries: list[tuple[str, str]] = []
         for ga, name in collector.entries:
             footprint.add(ga)
             if ga not in links:
                 open_entries.append((ga, name))
                 continue
-            wanted = "write" if ga in write_gas else "transmit"
-            if not _has_flag(links[ga], wanted):
-                report.misflagged.append((ga, wanted))
+            for flag in ("write", "transmit"):
+                if expected.get(flag):
+                    if not _has_flag(links[ga], flag):
+                        report.misflagged.append((ga, flag))
+                elif _has_flag(links[ga], flag):
+                    report.cross_linked.append((ga, flag))
         if open_entries:
             report.todo.append((number, collector, open_entries))
 
@@ -191,10 +206,18 @@ def todo_worksheet(spec: DeviceSpec, report: CheckReport) -> str:
             "",
         ]
         lines += [f"- [ ] `{ga}` {name}" for ga, name in entries]
+    flag_label = {"write": "empfängt", "transmit": "sendet"}
     if report.misflagged:
-        lines += ["", "## Falsch verknüpft (Objekt ohne passendes Flag)", ""]
-        flag_label = {"write": "Schreiben (empfängt)", "transmit": "Übertragen (sendet)"}
-        lines += [f"- `{ga}` — braucht {flag_label[flag]}" for ga, flag in report.misflagged]
+        lines += ["", "## Am falschen Objekt (Flag fehlt)", ""]
+        lines += [
+            f"- `{ga}` — gehört auf das {flag_label[flag]}-Objekt" for ga, flag in report.misflagged
+        ]
+    if report.cross_linked:
+        lines += ["", "## Zusätzlich am Gegenrichtungs-Objekt (Verknüpfung dort lösen)", ""]
+        lines += [
+            f"- `{ga}` — hängt auch am {flag_label[flag]}-Objekt"
+            for ga, flag in report.cross_linked
+        ]
     if report.extra:
         lines += ["", "## In ETS verknüpft, aber in keiner Quelle", ""]
         lines += [f"- `{ga}` {name}" for ga, name in report.extra]
@@ -294,6 +317,9 @@ def main(argv: list[str] | None = None) -> int:
                 report.links_expected,
                 report.objects,
             )
+            if args.todo_dir is not None:
+                # A worksheet left from an earlier run would read as open work.
+                (args.todo_dir / f"{spec.slug.lower()}-wiring-todo.md").unlink(missing_ok=True)
             continue
 
         clean = False
@@ -303,12 +329,14 @@ def main(argv: list[str] | None = None) -> int:
             todo_path.write_text(todo_worksheet(spec, report), encoding="utf-8")
             todo_hint = str(todo_path)
         logger.error(
-            "%s: %d of %d links open on %d objects, %d misflagged, %d unclaimed, %d not in ETS%s",
+            "%s: %d of %d links open on %d objects, %d misflagged, %d cross-linked, "
+            "%d unclaimed, %d not in ETS%s",
             spec.name,
             report.open_links,
             report.links_expected,
             len(report.todo),
             len(report.misflagged),
+            len(report.cross_linked),
             len(report.extra),
             len(report.missing_from_ets) + len(report.skipped),
             f" -> {todo_hint}" if todo_hint else "",
@@ -320,6 +348,12 @@ def main(argv: list[str] | None = None) -> int:
                 spec.name,
                 "misflagged",
                 [f"{ga} (needs {flag})" for ga, flag in report.misflagged],
+                None,
+            )
+            _log_capped(
+                spec.name,
+                "cross-linked",
+                [f"{ga} (also on the {flag} object)" for ga, flag in report.cross_linked],
                 None,
             )
             _log_capped(spec.name, "linked but unclaimed", [ga for ga, _ in report.extra], None)
