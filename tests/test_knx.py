@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from opentelemetry import trace
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import SpanContext
 from xknx.core import XknxConnectionState
 from xknx.dpt import DPT2ByteFloat, DPTArray, DPTBinary
 from xknx.telegram import Telegram
@@ -18,9 +21,11 @@ from knx_nats_bridge.metrics import Metrics
 class FakePublisher:
     def __init__(self) -> None:
         self.events: list[tuple[str, dict[str, Any]]] = []
+        self.span_contexts: list[SpanContext] = []
 
     def enqueue(self, _ctx: object, subject: str, payload: dict[str, Any]) -> bool:
         self.events.append((subject, payload))
+        self.span_contexts.append(trace.get_current_span().get_span_context())
         return True
 
 
@@ -141,3 +146,17 @@ def test_jsonable_collapses_tuples_and_value_wrappers() -> None:
     assert _jsonable((1, 2)) == [1, 2]
     assert _jsonable(Wraps()) == 42
     assert _jsonable({"k": (True, None)}) == {"k": [True, None]}
+
+
+def test_telegram_is_published_inside_a_bus_span(spans: InMemorySpanExporter) -> None:
+    listener, publisher, _ = _listener({"1/2/3": GAEntry(name="Licht", dpt="1.001")})
+    listener._on_telegram(_write_telegram("1/2/3", DPTBinary(1)))
+
+    (span,) = spans.get_finished_spans()
+    assert span.name == "knx telegram 1/2/3"
+    assert span.attributes is not None
+    assert span.attributes["knx.ga"] == "1/2/3"
+    assert span.attributes["knx.source"] == "1.1.5"
+    assert span.attributes["knx.name"] == "Licht"
+    assert span.attributes["knx.dpt"] == "1.001"
+    assert publisher.span_contexts[0].span_id == span.context.span_id

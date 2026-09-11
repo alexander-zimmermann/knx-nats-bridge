@@ -16,6 +16,9 @@ from nats.errors import TimeoutError as NATSTimeoutError
 from nats.js import JetStreamContext
 from nats.js.api import ConsumerConfig, DeliverPolicy
 from nats.js.errors import NotFoundError
+from nats_bridge_core import tracing
+from opentelemetry import trace
+from opentelemetry.trace import StatusCode
 from xknx import XKNX
 from xknx.dpt import DPTArray, DPTBase, DPTBinary
 from xknx.telegram import Telegram
@@ -27,6 +30,7 @@ from .metrics import Metrics
 from .writer_rules import WriterRule, WriterRules, extract_value
 
 logger = logging.getLogger(__name__)
+_tracer = trace.get_tracer("knx_nats_bridge")
 
 # Per-subject timeout when seeding the responder cache from JetStream at startup.
 # Short so a cold/missing stream doesn't stall "bridge is up"; seeds run in parallel.
@@ -144,23 +148,36 @@ class Writer:
         logger.info("writer nats reconnected")
 
     async def _on_message(self, msg: Msg) -> None:
+        # Joins the trace the publisher put into the NATS headers.
+        with tracing.consumer_span(msg):
+            await self._handle(msg)
+
+    async def _handle(self, msg: Msg) -> None:
         subject = msg.subject
         start = time.monotonic()
         try:
             payload = json.loads(msg.data) if msg.data else {}
         except json.JSONDecodeError:
             self._metrics.knx_write_errors.labels(reason="bad_json").inc()
+            trace.get_current_span().set_status(StatusCode.ERROR, "bad_json")
             logger.warning("writer: non-JSON message on %s", subject)
             return
 
         # One subject may fan out to several GAs (e.g. boiler_data mirrors
         # both burner-status and DHW-state); process each rule in order.
         for rule in self._rules.for_subject(subject):
-            await self._apply(rule, payload)
+            with _tracer.start_as_current_span(
+                f"knx write {rule.ga}", attributes={"knx.ga": rule.ga, "knx.dpt": rule.dpt}
+            ) as span:
+                outcome = await self._apply(rule, payload)
+                span.set_attribute("knx.outcome", outcome)
+                if outcome not in ("ok", "suppressed"):
+                    span.set_status(StatusCode.ERROR, outcome)
 
         self._metrics.knx_write_duration.observe(time.monotonic() - start)
 
-    async def _apply(self, rule: WriterRule, payload: dict[str, Any]) -> None:
+    async def _apply(self, rule: WriterRule, payload: dict[str, Any]) -> str:
+        """Apply one rule; returns "ok", "suppressed", or the error reason."""
         try:
             raw_value = extract_value(payload, rule.payload_path)
         except (KeyError, ValueError) as exc:
@@ -171,7 +188,7 @@ class Writer:
                 rule.subject,
                 exc,
             )
-            return
+            return "payload_path"
 
         # Deadband barrier: drop bus-spamming jitter before encoding/sending.
         if not self._should_write(rule, raw_value):
@@ -184,7 +201,7 @@ class Writer:
                 rule.ga,
                 raw_value,
             )
-            return
+            return "suppressed"
 
         try:
             dpt_payload = _encode_for_dpt(raw_value, rule.dpt)
@@ -198,7 +215,7 @@ class Writer:
                 rule.ga,
                 exc,
             )
-            return
+            return "dpt_encode"
 
         telegram = Telegram(
             destination_address=GroupAddress(rule.ga),
@@ -210,7 +227,7 @@ class Writer:
             self._metrics.knx_writes.labels(subject=rule.subject, ga=rule.ga, outcome="error").inc()
             self._metrics.knx_write_errors.labels(reason="bus").inc()
             logger.exception("writer: bus write failed for ga=%s", rule.ga)
-            return
+            return "bus"
 
         # Record only after a successful send so the deadband measures against
         # the last value actually on the bus (a failed write retries next time).
@@ -223,6 +240,7 @@ class Writer:
             rule.dpt,
             raw_value,
         )
+        return "ok"
 
     def _on_read_request(self, telegram: Telegram) -> None:
         """Answer a GroupValueRead for a written GA with the last value put on the bus.
