@@ -74,6 +74,8 @@ Auth precedence: `NATS_CREDS_FILE` > `NATS_NKEY_SEED_FILE` > `NATS_USER` + `NATS
 | `METRICS_PORT` | `9090`  | HTTP port for `/metrics` and `/healthz` |
 | `LOG_LEVEL`    | `INFO`  |                                         |
 | `LOG_FORMAT`   | `json`  | `json` or `text`                        |
+| `TRACING_ENDPOINT` | unset | OTLP/HTTP collector base URL (`http://host:4318`); unset keeps tracing off |
+| `TRACING_SAMPLING_RATIO` | `0.1` | root sampling ratio; keep it equal to the connect tracer |
 
 ## GA catalog format
 

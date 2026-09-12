@@ -7,6 +7,8 @@ from typing import Any
 import pytest
 from nats.errors import TimeoutError as NATSTimeoutError
 from nats.js.errors import NotFoundError
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import StatusCode
 from xknx.dpt import DPT2ByteFloat, DPTBinary
 from xknx.telegram import Telegram
 from xknx.telegram.address import GroupAddress
@@ -37,6 +39,7 @@ class FakeXknx:
 class FakeMsg:
     subject: str
     data: bytes
+    headers: dict[str, str] | None = None
 
 
 def _writer(mappings: list[WriterRule]) -> tuple[Writer, FakeXknx, Metrics]:
@@ -478,3 +481,38 @@ async def test_seed_noop_when_no_subjects_flagged() -> None:
 
     assert writer._last_written == {}
     assert js.subs == []  # no JetStream call at all
+
+
+@pytest.mark.asyncio
+async def test_write_runs_in_a_consumer_span_joined_to_the_message_trace(
+    spans: InMemorySpanExporter,
+) -> None:
+    writer, _, _ = _writer(
+        [WriterRule("ems-esp.boiler_data", "15/2/1", "1.001", "$.burnstart_active")]
+    )
+    msg = FakeMsg(
+        "ems-esp.boiler_data",
+        json.dumps({"burnstart_active": True}).encode(),
+        headers={"traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"},
+    )
+    await writer._on_message(msg)  # type: ignore[arg-type]
+
+    by_name = {s.name: s for s in spans.get_finished_spans()}
+    process = by_name["process ems-esp.boiler_data"]
+    assert process.context.trace_id == 0x0AF7651916CD43DD8448EB211C80319C
+    assert process.parent is not None and process.parent.span_id == 0xB7AD6B7169203331
+    write = by_name["knx write 15/2/1"]
+    assert write.parent is not None and write.parent.span_id == process.context.span_id
+    assert write.attributes is not None
+    assert write.attributes["knx.outcome"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_write_span_records_the_error_outcome(spans: InMemorySpanExporter) -> None:
+    writer, _, _ = _writer([WriterRule("s", "15/2/1", "1.001", "$.missing")])
+    await writer._on_message(FakeMsg("s", b"{}"))  # type: ignore[arg-type]
+
+    write = next(s for s in spans.get_finished_spans() if s.name == "knx write 15/2/1")
+    assert write.attributes is not None
+    assert write.attributes["knx.outcome"] == "payload_path"
+    assert write.status.status_code is StatusCode.ERROR

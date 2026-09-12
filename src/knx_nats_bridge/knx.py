@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from nats_bridge_core import Publisher
+from opentelemetry import trace
 from xknx import XKNX
 from xknx.core import XknxConnectionState
 from xknx.dpt import DPTArray, DPTBase, DPTBinary
@@ -22,6 +23,7 @@ from .mapping import GAEntry, GroupAddressMapping
 from .metrics import Metrics
 
 logger = logging.getLogger(__name__)
+_tracer = trace.get_tracer("knx_nats_bridge")
 
 
 class KnxListener:
@@ -126,6 +128,21 @@ class KnxListener:
         if len(parts) != 3:
             return
 
+        # The trace starts at the bus; the publish span joins it through the
+        # context enqueue() captures.
+        with _tracer.start_as_current_span(
+            f"knx telegram {ga_str}",
+            attributes={"knx.ga": ga_str, "knx.source": str(telegram.source_address)},
+        ):
+            self._publish_group_value(telegram, apci, ga_str, parts)
+
+    def _publish_group_value(
+        self,
+        telegram: Telegram,
+        apci: GroupValueWrite | GroupValueResponse,
+        ga_str: str,
+        parts: list[str],
+    ) -> None:
         # Count every valid GroupValue telegram and bump the freshness gauge,
         # regardless of mapping coverage. Lets operators see bus activity in
         # /metrics even before/without a ga-catalog.yaml.
@@ -143,6 +160,7 @@ class KnxListener:
                 return
             # RAW: publish with a synthetic name/dpt so downstream can still see it.
             entry = GAEntry(name=ga_str, dpt="0.000")
+        trace.get_current_span().set_attributes({"knx.name": entry.name, "knx.dpt": entry.dpt})
 
         dpt_value: Any
         try:
