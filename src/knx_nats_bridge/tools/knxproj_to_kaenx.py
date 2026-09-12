@@ -768,10 +768,16 @@ def build_device_model(
     # whose version it already knows, so the version is derived from
     # the ETS export: one above what is imported, or the template's
     # V 1.0 for a device ETS has never seen.
+    base = int(application["Number"])
     imported = _imported_app_version(project_data, spec.slug)
-    version = imported + 1 if imported is not None else int(application["Number"])
+    version = imported + 1 if imported is not None else base
     application["Number"] = version
     report.app_version = version
+    # ETS offers "update application program" — the in-place path that
+    # keeps every group link — only for a version that declares which
+    # earlier versions it replaces. Name them all, so a device left on
+    # any earlier version can still step straight to the newest.
+    application["ReplacesVersions"] = " ".join(str(v) for v in range(base, version))
     application["Name"] = spec.slug.lower()
     application["NameText"] = f"V {version >> 4}.{version & 0xF} {spec.name}"
     application["Text"] = [_translation(language, spec.name)]
