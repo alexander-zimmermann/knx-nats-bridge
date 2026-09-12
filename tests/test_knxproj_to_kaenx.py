@@ -306,6 +306,16 @@ def test_app_version_bumps_above_imported() -> None:
     assert model["Application"]["Number"] == 0x12
     assert report.app_version == 0x12
     assert model["Application"]["NameText"] == "V 1.2 KNX-NATS-Bridge"
+    # ETS enables the in-place update only for a version that names the
+    # ones it replaces — every earlier one, so a device still on V 1.0
+    # steps straight to V 1.2 as well.
+    assert model["Application"]["ReplacesVersions"] == "16 17"
+
+
+def test_first_version_replaces_nothing() -> None:
+    model, report = _build()
+    assert report.app_version == 16
+    assert model["Application"]["ReplacesVersions"] == ""
 
 
 def test_unmatched_write_gas_is_reported() -> None:
