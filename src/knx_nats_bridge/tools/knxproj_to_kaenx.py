@@ -938,10 +938,12 @@ def build_device_model(
             version = base
     application["Number"] = version
     report.app_version = version
-    # ETS offers "update application program" — the in-place path that
-    # keeps every group link — only for a version that declares which
-    # earlier versions it replaces. Name them all, so a device left on
-    # any earlier version can still step straight to the newest.
+    # ETS offers "update application program" only for a version that
+    # declares which earlier versions it replaces. It keeps parameters,
+    # not group links (tested twice on these products) — the links move
+    # by hand onto a second device instance, object by object, which is
+    # why numbers must never change. Name every earlier version anyway,
+    # so ETS files the new one as an update of the same product.
     application["ReplacesVersions"] = " ".join(str(v) for v in range(base, version))
     application["Name"] = spec.slug.lower()
     application["NameText"] = f"V {version >> 4}.{version & 0xF} {spec.name}"
@@ -1130,8 +1132,9 @@ def main(argv: list[str] | None = None) -> int:
             logger.info("%s: not in the ETS project yet — publish, import and add it", spec.name)
         elif report.new_objects:
             logger.info(
-                "%s: %d new object(s) against the installed application — publish and "
-                "update the device: %s",
+                "%s: %d new object(s) against the installed application — publish it, add "
+                "the new version as a second device in ETS, move the links over object by "
+                "object (numbers match), delete the old device: %s",
                 spec.name,
                 len(report.new_objects),
                 ", ".join(f"{c.number} {c.text}" for c in report.new_objects[:6])
@@ -1146,8 +1149,8 @@ def main(argv: list[str] | None = None) -> int:
             level = logging.ERROR if count else logging.WARNING
             logger.log(
                 level,
-                "%s: installed object %d (%s) with %d link(s) would be dropped or renumbered "
-                "by this version",
+                "%s: installed object %d (%s) with %d link(s) has no same-numbered object in "
+                "this version — its links need a new home",
                 spec.name,
                 number,
                 key,
@@ -1155,7 +1158,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         if lost_links and not args.accept_loss:
             logger.error(
-                "%s: updating the device to this version would lose %d link(s) — nothing "
+                "%s: %d link(s) sit on objects this version drops or renumbers — nothing "
                 "written; fix the registry, or pass --accept-loss to proceed anyway",
                 spec.name,
                 lost_links,
@@ -1227,10 +1230,11 @@ def write_registry(path: Path, registry: Mapping[str, DeviceRegistry]) -> None:
         "# last handed to Kaenx-Creator, and every object's number. knxproj-to-kaenx\n"
         "# maintains this file — it seeds a section from the device in the ETS export,\n"
         "# appends every new collector with the next free number and never renumbers.\n"
-        "# Keep it committed: the numbers are what lets an application update in ETS\n"
-        "# keep the group links, the version keeps every publish above the last one.\n"
-        "# A key the configuration no longer produces stays here and is still emitted,\n"
-        "# so links on it survive; delete it only when its links are gone.\n"
+        "# Keep it committed: stable numbers make moving the links onto a new device\n"
+        "# version a 1:1 job (object 1 to 1, 2 to 2, ...), and the version keeps every\n"
+        "# publish above the last one. A key the configuration no longer produces stays\n"
+        "# here and is still emitted, so its object keeps existing; delete it only when\n"
+        "# its links are gone.\n"
     )
     ordered = {
         device: {
