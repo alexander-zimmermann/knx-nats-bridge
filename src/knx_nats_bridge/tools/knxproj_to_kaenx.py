@@ -53,12 +53,15 @@ import logging
 import re
 import sys
 import uuid
+import zipfile
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from knx_nats_bridge.tools.knxproj_to_yaml import _load_project
+import yaml
+
+from knx_nats_bridge.tools.knxproj_to_yaml import _load_project, add_password_argument
 
 logger = logging.getLogger(__name__)
 
@@ -326,14 +329,41 @@ class Collector:
     dpt_main: int
     dpt_sub: int | None  # None collects the addresses without a (known) subtype
     direction: str  # key into _DIRECTIONS
+    number: int = 0  # ETS object number; assigned by the registry, else by position
     text: str = ""
     entries: list[tuple[str, str]] = field(default_factory=list)  # (ga, ETS name)
+    legacy: bool = False  # kept from the registry, no address of the configuration
 
     @property
     def dpt_label(self) -> str:
         if self.dpt_sub is None:
             return f"{self.dpt_main}.xxx"
         return f"{self.dpt_main}.{self.dpt_sub:03d}"
+
+    @property
+    def key(self) -> str:
+        """The object's identity across versions: also its name in the
+        product data, so an installed device tells which objects it has."""
+        return f"hg{self.main_group}-dpt{self.dpt_label}-{self.direction}"
+
+
+_KEY_RE = re.compile(r"^hg(\d+)-dpt(\d+)(?:\.(\d+|xxx))?-(transmit|write|both)$")
+
+
+def parse_collector_key(key: str) -> Collector | None:
+    """Rebuild a collector from its key; ``None`` if it is not one of ours.
+
+    Accepts the first generation's spelling without a subtype part
+    (``hg2-dpt1-both``), which meant the same as today's ``.xxx``.
+    """
+    match = _KEY_RE.match(key)
+    if not match:
+        return None
+    main_group, dpt_main, sub, direction = match.groups()
+    dpt_sub = None if sub in (None, "xxx") else int(sub)
+    return Collector(
+        main_group=int(main_group), dpt_main=int(dpt_main), dpt_sub=dpt_sub, direction=direction
+    )
 
 
 @dataclass
@@ -349,6 +379,9 @@ class DeviceReport:
     skipped: list[tuple[str, str]] = field(default_factory=list)  # (ga, reason)
     unmatched_write_gas: list[str] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)  # listed in a @file, absent from ETS
+    new_objects: list[Collector] = field(default_factory=list)  # not on the installed device
+    # (number, installed name, links) — installed objects the new version drops or renumbers
+    lost: list[tuple[int, str, int]] = field(default_factory=list)
 
 
 def parse_device_spec(raw: str, app_number: int) -> DeviceSpec:
@@ -452,7 +485,7 @@ def _com_object(number: int, collector: Collector, language: Mapping[str, Any]) 
         "$type": f"Kaenx.Creator.Models.ComObject, {_SHARE}",
         "UId": number,
         "Id": number,
-        "Name": f"hg{collector.main_group}-dpt{collector.dpt_label}-{collector.direction}",
+        "Name": collector.key,
         "Text": [_translation(language, collector.text)],
         "TranslationText": False,
         "FunctionText": [_translation(language, function_text)],
@@ -636,12 +669,23 @@ def build_collectors(
     project_data: Mapping[str, Any],
     write_gas: frozenset[str],
     report: DeviceReport,
+    registry: dict[str, int] | None = None,
+    installed: Mapping[int, str] | None = None,
 ) -> list[Collector]:
     """Resolve the device's addresses and group them into the ordered,
     numbered collector list; counts and gaps land on ``report``.
 
     Shared between generation and the wiring check so both see the
     identical objects — same cut, same order, same numbers.
+
+    Numbers come from ``registry`` (key -> number, append-only, updated
+    in place): a collector keeps its number forever, a new one gets the
+    next free number, and a registered key the configuration no longer
+    produces is still emitted as a legacy object so links on it
+    survive. ``installed`` (number -> key, from the device in the ETS
+    export) is merged into the registry first, so the registry is
+    seeded from whatever is on the device and never contradicts it.
+    Without a registry the numbers are positional.
     """
     if spec.source.startswith("@"):
         path = Path(spec.source[1:])
@@ -702,10 +746,10 @@ def build_collectors(
     if spec.mode == "split":
         report.unmatched_write_gas = sorted(write_gas - set(gas), key=_ga_sort_key)
 
-    # Stable object order: main group, datapoint type (main-type
-    # collector before its subtypes), sending before receiving — so a
-    # regeneration keeps the numbers and existing ETS links survive an
-    # application update.
+    # Positional order: main group, datapoint type (main-type collector
+    # before its subtypes), sending before receiving. It numbers a
+    # device without a registry, and decides the order in which new
+    # collectors take the next free numbers.
     ordered = sorted(
         collectors.values(),
         key=lambda c: (
@@ -715,13 +759,121 @@ def build_collectors(
             c.direction == "write",
         ),
     )
+    # Installed names in the first generation's spelling mean the same
+    # object as today's key; compare and register them normalised.
+    installed = {
+        number: (parsed.key if (parsed := parse_collector_key(name)) else name)
+        for number, name in (installed or {}).items()
+    }
+    if registry is None:
+        for number, collector in enumerate(ordered, start=1):
+            collector.number = number
+    else:
+        ordered = _number_from_registry(ordered, registry, installed, spec.name)
     for collector in ordered:
         hg_name = hg_names.get(collector.main_group, f"Hauptgruppe {collector.main_group}")
         suffix = {"write": " · empfängt", "transmit": " · sendet"}.get(collector.direction, "")
         collector.text = f"{hg_name} · {collector.dpt_label}{suffix}"
+    if installed:
+        emitted = {c.number: c.key for c in ordered}
+        report.new_objects = [c for c in ordered if c.number not in installed]
+        report.lost = [
+            (number, key, 0)
+            for number, key in sorted(installed.items())
+            if emitted.get(number) != key
+        ]
     report.objects = len(ordered)
     report.collectors = ordered
     return ordered
+
+
+def _number_from_registry(
+    ordered: list[Collector],
+    registry: dict[str, int],
+    installed: Mapping[int, str],
+    device: str,
+) -> list[Collector]:
+    """Assign registry numbers; append the unknown; keep the orphaned."""
+    for number, key in sorted(installed.items()):
+        if registry.get(key) not in (None, number):
+            raise SystemExit(
+                f"{device}: installed object {number} is {key!r} but the registry holds it as "
+                f"number {registry[key]} — the device in the export and the registry disagree; "
+                "delete the device's registry section to re-seed it from the export"
+            )
+        taken = {k for k, n in registry.items() if n == number and k != key}
+        if taken:
+            raise SystemExit(
+                f"{device}: installed object {number} is {key!r} but the registry has that "
+                f"number for {taken.pop()!r} — delete the device's registry section to re-seed "
+                "it from the export"
+            )
+        registry[key] = number
+    next_free = max(registry.values(), default=0) + 1
+    by_key = {c.key: c for c in ordered}
+    for collector in ordered:
+        if collector.key in registry:
+            collector.number = registry[collector.key]
+        else:
+            collector.number = next_free
+            registry[collector.key] = next_free
+            next_free += 1
+    for key, number in registry.items():
+        if key in by_key:
+            continue
+        legacy = parse_collector_key(key)
+        if legacy is None:
+            raise SystemExit(f"{device}: registry key {key!r} is not a collector key")
+        legacy.number = number
+        legacy.legacy = True
+        by_key[key] = legacy
+    return sorted(by_key.values(), key=lambda c: c.number)
+
+
+def installed_objects(
+    knxproj: Path, project_data: Mapping[str, Any], order_number: str
+) -> dict[int, str]:
+    """{object number -> key} of the application installed on the device
+    with that order number, read from the product data in the export;
+    empty when the device is not in the project."""
+    application_id = next(
+        (
+            str(device.get("application") or "")
+            for device in (project_data.get("devices", {}) or {}).values()
+            if isinstance(device, dict) and device.get("order_number") == order_number
+        ),
+        "",
+    )
+    if not application_id:
+        return {}
+    manufacturer = application_id.split("_", 1)[0]
+    with zipfile.ZipFile(knxproj) as archive:
+        try:
+            xml = archive.read(f"{manufacturer}/{application_id}.xml").decode("utf-8")
+        except KeyError:
+            return {}
+    objects: dict[int, str] = {}
+    for tag in re.findall(r"<ComObject\b[^>]*/?>", xml):
+        name = re.search(r'\bName="([^"]*)"', tag)
+        number = re.search(r'\bNumber="(\d+)"', tag)
+        if name and number:
+            objects[int(number.group(1))] = name.group(1)
+    return objects
+
+
+def installed_links(project_data: Mapping[str, Any], order_number: str) -> dict[int, int]:
+    """{object number -> linked group addresses} on the installed device."""
+    addresses = {
+        str(addr)
+        for addr, device in (project_data.get("devices", {}) or {}).items()
+        if isinstance(device, dict) and device.get("order_number") == order_number
+    }
+    counts: dict[int, int] = {}
+    for co in (project_data.get("communication_objects", {}) or {}).values():
+        if isinstance(co, dict) and str(co.get("device_address")) in addresses:
+            number = int(co.get("number") or 0)
+            counts[number] = counts.get(number, 0) + len(co.get("group_address_links") or [])
+    return counts
 
 
 def build_device_model(
@@ -730,19 +882,21 @@ def build_device_model(
     project_data: Mapping[str, Any],
     write_gas: frozenset[str],
     catalog_section: str | None = None,
+    registry: dict[str, int] | None = None,
+    installed: Mapping[int, str] | None = None,
+    published: int = 0,
 ) -> tuple[dict[str, Any], DeviceReport]:
     """Fill a copy of the template with one collector object per
-    (main group, datapoint type, direction)."""
+    (main group, datapoint type, direction). ``published`` is the
+    highest version already handed to Kaenx-Creator for this device,
+    from the registry — the export alone cannot know it."""
     model = copy.deepcopy(dict(template))
     application = model["Application"]
     language = dict(application["Languages"][0])
     report = DeviceReport()
 
-    ordered = build_collectors(spec, project_data, write_gas, report)
-    com_objects = [
-        _com_object(number, collector, language)
-        for number, collector in enumerate(ordered, start=1)
-    ]
+    ordered = build_collectors(spec, project_data, write_gas, report, registry, installed)
+    com_objects = [_com_object(collector.number, collector, language) for collector in ordered]
 
     refs = [_com_object_ref(co, language) for co in com_objects]
     hg_names = _main_group_names(project_data)
@@ -761,7 +915,7 @@ def build_device_model(
     application["ComObjects"] = com_objects
     application["ComObjectRefs"] = refs
     application["Dynamics"] = _dynamics(blocks)
-    application["HighestComNumber"] = len(com_objects)
+    application["HighestComNumber"] = max((c.number for c in ordered), default=0)
     # Application.Number is the version byte (0x10 = V 1.0; ETS shows
     # high.low nibble), not the application's identity — that is
     # Info.AppNumber. ETS silently refuses to re-import an application
@@ -770,7 +924,18 @@ def build_device_model(
     # V 1.0 for a device ETS has never seen.
     base = int(application["Number"])
     imported = _imported_app_version(project_data, spec.slug)
-    version = imported + 1 if imported is not None else base
+    unchanged = bool(installed) and {c.number: c.key for c in ordered} == {
+        n: (parsed.key if (parsed := parse_collector_key(k)) else k)
+        for n, k in (installed or {}).items()
+    }
+    if imported is not None and unchanged:
+        # Nothing to publish: keep the installed version rather than
+        # burning one on every run.
+        version = imported
+    else:
+        version = max(imported or 0, published, base - 1) + 1
+        if imported is None and published < base:
+            version = base
     application["Number"] = version
     report.app_version = version
     # ETS offers "update application program" — the in-place path that
@@ -810,9 +975,21 @@ def wiring_worksheet(spec: DeviceSpec, report: DeviceReport) -> str:
         f"{report.objects} Sammel-Objekte, {report.links} Verknüpfungen. Pro Objekt in ETS:",
         "die GAs unten per Mehrfachauswahl markieren und auf das Objekt ziehen.",
     ]
-    for number, collector in enumerate(report.collectors, start=1):
-        lines += ["", f"## Objekt {number}: {collector.text} ({len(collector.entries)} GAs)", ""]
+    for collector in report.collectors:
+        if collector.legacy:
+            continue
+        marker = " — NEU" if collector in report.new_objects else ""
+        count = f"({len(collector.entries)} GAs)"
+        lines += ["", f"## Objekt {collector.number}: {collector.text} {count}{marker}", ""]
         lines += [f"- [ ] `{ga}` {name}" for ga, name in collector.entries]
+    legacy = [c for c in report.collectors if c.legacy]
+    if legacy:
+        lines += [
+            "",
+            "## Altobjekte (keine Adresse der Konfiguration; bleiben für bestehende Links)",
+            "",
+        ]
+        lines += [f"- Objekt {c.number}: {c.text}" for c in legacy]
     if report.skipped:
         lines += ["", "## Nicht aufgenommen", ""]
         lines += [f"- `{ga}` — {reason}" for ga, reason in report.skipped]
@@ -825,7 +1002,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Generate Kaenx-Creator projects from an ETS export"
     )
     parser.add_argument("--input", "-i", required=True, type=Path, help="Path to .knxproj file")
-    parser.add_argument("--password", default=None, help="ETS project password (if encrypted)")
+    add_password_argument(parser)
     parser.add_argument(
         "--template",
         required=True,
@@ -867,6 +1044,25 @@ def main(argv: list[str] | None = None) -> int:
         help="Rename the exported catalog section (shown inside the manufacturer in ETS)",
     )
     parser.add_argument(
+        "--registry",
+        type=Path,
+        default=None,
+        help=(
+            "YAML file holding each device's object numbers (key -> number). Read, "
+            "seeded from the devices in the export, extended with new objects and "
+            "written back. Without it, numbers are positional and change whenever "
+            "the object set does."
+        ),
+    )
+    parser.add_argument(
+        "--accept-loss",
+        action="store_true",
+        help=(
+            "Write the projects even though updating a device to them would drop or "
+            "renumber objects that carry links in the export."
+        ),
+    )
+    parser.add_argument(
         "--output-dir", "-o", required=True, type=Path, help="Directory for the .ae-manu files"
     )
     parser.add_argument("--verbose", "-v", action="store_true")
@@ -891,18 +1087,37 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("parsing %s", args.input)
     project_data = _load_project(args.input, args.password)
 
+    registry = read_registry(args.registry) if args.registry else None
+
     args.output_dir.mkdir(parents=True, exist_ok=True)
     failed = False
+    outputs: list[tuple[Path, str]] = []
     for spec in specs:
+        installed = installed_objects(args.input, project_data, spec.slug)
+        section = registry.setdefault(spec.name, DeviceRegistry()) if registry is not None else None
         model, report = build_device_model(
-            template, spec, project_data, write_gas, catalog_section=args.catalog_section
+            template,
+            spec,
+            project_data,
+            write_gas,
+            catalog_section=args.catalog_section,
+            registry=section.objects if section is not None else None,
+            installed=installed,
+            published=section.version if section is not None else 0,
         )
-        out = args.output_dir / f"{spec.slug.lower()}.ae-manu"
-        out.write_text(json.dumps(model, indent=2, ensure_ascii=False), encoding="utf-8")
-        worksheet = args.output_dir / f"{spec.slug.lower()}-wiring.md"
-        worksheet.write_text(wiring_worksheet(spec, report), encoding="utf-8")
+        if section is not None and report.app_version > section.version:
+            section.version = report.app_version
+        links = installed_links(project_data, spec.slug)
+        report.lost = [(n, key, links.get(n, 0)) for n, key, _ in report.lost]
+        lost_links = sum(count for _, _, count in report.lost)
+
+        content = json.dumps(model, indent=2, ensure_ascii=False)
+        outputs.append((args.output_dir / f"{spec.slug.lower()}.ae-manu", content))
+        outputs.append(
+            (args.output_dir / f"{spec.slug.lower()}-wiring.md", wiring_worksheet(spec, report))
+        )
         logger.info(
-            "%s: V %d.%d, %d collector objects, %d links (%d write, %d transmit) -> %s (+ %s)",
+            "%s: V %d.%d, %d collector objects, %d links (%d write, %d transmit)",
             spec.name,
             report.app_version >> 4,
             report.app_version & 0xF,
@@ -910,9 +1125,42 @@ def main(argv: list[str] | None = None) -> int:
             report.links,
             report.write,
             report.transmit,
-            out,
-            worksheet.name,
         )
+        if not installed:
+            logger.info("%s: not in the ETS project yet — publish, import and add it", spec.name)
+        elif report.new_objects:
+            logger.info(
+                "%s: %d new object(s) against the installed application — publish and "
+                "update the device: %s",
+                spec.name,
+                len(report.new_objects),
+                ", ".join(f"{c.number} {c.text}" for c in report.new_objects[:6])
+                + (" …" if len(report.new_objects) > 6 else ""),
+            )
+        else:
+            logger.info(
+                "%s: same objects as the installed application — no publish needed, only links",
+                spec.name,
+            )
+        for number, key, count in report.lost:
+            level = logging.ERROR if count else logging.WARNING
+            logger.log(
+                level,
+                "%s: installed object %d (%s) with %d link(s) would be dropped or renumbered "
+                "by this version",
+                spec.name,
+                number,
+                key,
+                count,
+            )
+        if lost_links and not args.accept_loss:
+            logger.error(
+                "%s: updating the device to this version would lose %d link(s) — nothing "
+                "written; fix the registry, or pass --accept-loss to proceed anyway",
+                spec.name,
+                lost_links,
+            )
+            failed = True
         for ga, reason in report.skipped:
             logger.warning(
                 "%s: skipped %s: %s — it stays on the placeholder", spec.name, ga, reason
@@ -933,7 +1181,67 @@ def main(argv: list[str] | None = None) -> int:
                 ga,
             )
             failed = True
-    return 1 if failed else 0
+    if failed:
+        return 1
+    for path, content in outputs:
+        path.write_text(content, encoding="utf-8")
+        logger.info("wrote %s", path)
+    if registry is not None and args.registry is not None:
+        write_registry(args.registry, registry)
+        logger.info("registry updated: %s", args.registry)
+    return 0
+
+
+@dataclass
+class DeviceRegistry:
+    """One device's section of the registry: the last version handed to
+    Kaenx-Creator, and every object's number."""
+
+    version: int = 0
+    objects: dict[str, int] = field(default_factory=dict)
+
+
+def read_registry(path: Path) -> dict[str, DeviceRegistry]:
+    """{device name -> section}; a missing file is an empty registry."""
+    if not path.is_file():
+        return {}
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        raise SystemExit(f"{path}: expected a mapping of device names")
+    registry: dict[str, DeviceRegistry] = {}
+    for device, section in data.items():
+        objects = section.get("objects") if isinstance(section, dict) else None
+        if not isinstance(objects, dict):
+            raise SystemExit(f"{path}: {device}: expected 'version' and 'objects'")
+        numbers = {str(k): int(v) for k, v in objects.items()}
+        if len(set(numbers.values())) != len(numbers):
+            raise SystemExit(f"{path}: {device}: object numbers are not unique")
+        registry[str(device)] = DeviceRegistry(int(section.get("version") or 0), numbers)
+    return registry
+
+
+def write_registry(path: Path, registry: Mapping[str, DeviceRegistry]) -> None:
+    """Write the registry sorted by number, so the diff reads like the device."""
+    header = (
+        "# The generated ETS devices, one section per device: the application version\n"
+        "# last handed to Kaenx-Creator, and every object's number. knxproj-to-kaenx\n"
+        "# maintains this file — it seeds a section from the device in the ETS export,\n"
+        "# appends every new collector with the next free number and never renumbers.\n"
+        "# Keep it committed: the numbers are what lets an application update in ETS\n"
+        "# keep the group links, the version keeps every publish above the last one.\n"
+        "# A key the configuration no longer produces stays here and is still emitted,\n"
+        "# so links on it survive; delete it only when its links are gone.\n"
+    )
+    ordered = {
+        device: {
+            "version": section.version,
+            "objects": dict(sorted(section.objects.items(), key=lambda kv: kv[1])),
+        }
+        for device, section in sorted(registry.items())
+    }
+    path.write_text(
+        header + yaml.safe_dump(ordered, sort_keys=False, allow_unicode=True), encoding="utf-8"
+    )
 
 
 if __name__ == "__main__":

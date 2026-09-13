@@ -56,10 +56,12 @@ from knx_nats_bridge.tools.knxproj_to_kaenx import (
     DeviceSpec,
     _ga_sort_key,
     build_collectors,
+    installed_objects,
     parse_device_spec,
     read_ga_list,
+    read_registry,
 )
-from knx_nats_bridge.tools.knxproj_to_yaml import _load_project
+from knx_nats_bridge.tools.knxproj_to_yaml import _load_project, add_password_argument
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +146,8 @@ def check_device(
     project_data: Mapping[str, Any],
     spec: DeviceSpec,
     write_gas: frozenset[str],
+    registry: dict[str, int] | None = None,
+    installed: Mapping[int, str] | None = None,
 ) -> CheckReport:
     report = CheckReport()
     links, device_found = _device_links(project_data, spec.slug)
@@ -152,7 +156,7 @@ def check_device(
         return report
 
     build = DeviceReport()
-    collectors = build_collectors(spec, project_data, write_gas, build)
+    collectors = build_collectors(spec, project_data, write_gas, build, registry, installed)
     report.objects = build.objects
     report.links_expected = build.links
     report.missing_from_ets = build.missing
@@ -160,7 +164,8 @@ def check_device(
     report.linked = len(links)
 
     footprint: set[str] = set()
-    for number, collector in enumerate(collectors, start=1):
+    for collector in collectors:
+        number = collector.number
         expected = _DIRECTIONS[collector.direction][1]
         open_entries: list[tuple[str, str]] = []
         for ga, name in collector.entries:
@@ -244,7 +249,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Hold an ETS export against the software-device footprints"
     )
     parser.add_argument("--input", "-i", required=True, type=Path, help="Path to .knxproj file")
-    parser.add_argument("--password", default=None, help="ETS project password (if encrypted)")
+    add_password_argument(parser)
     parser.add_argument(
         "--device",
         action="append",
@@ -266,6 +271,12 @@ def main(argv: list[str] | None = None) -> int:
             "linked to Write-flagged objects, all other footprint addresses "
             "to Transmit-flagged ones."
         ),
+    )
+    parser.add_argument(
+        "--registry",
+        type=Path,
+        default=None,
+        help="The generator's object registry, so worksheets carry the device's numbers",
     )
     parser.add_argument(
         "--todo-dir",
@@ -295,12 +306,20 @@ def main(argv: list[str] | None = None) -> int:
 
     logger.info("parsing %s", args.input)
     project_data = _load_project(args.input, args.password)
+    registry = read_registry(args.registry) if args.registry else None
     if args.todo_dir is not None:
         args.todo_dir.mkdir(parents=True, exist_ok=True)
 
     clean = True
     for spec in specs:
-        report = check_device(project_data, spec, write_gas)
+        # A copy: the check never writes the registry, the generator does.
+        device_registry: dict[str, int] | None = None
+        if registry is not None and spec.name in registry:
+            device_registry = dict(registry[spec.name].objects)
+        elif registry is not None:
+            device_registry = {}
+        installed = installed_objects(args.input, project_data, spec.slug)
+        report = check_device(project_data, spec, write_gas, device_registry, installed)
         if not report.device_found:
             logger.error(
                 "%s: no device with order number %s in the project — import it "

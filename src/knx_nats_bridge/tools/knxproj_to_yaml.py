@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import re
 import sys
 from collections.abc import Container, Mapping, Sequence
@@ -27,9 +28,24 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
+PASSWORD_ENV = "KNXPROJ_PASSWORD"
+
+
+def add_password_argument(parser: argparse.ArgumentParser) -> None:
+    """The ``--password`` option every tool reading a .knxproj shares:
+    defaults to the environment so the secret never has to appear on a
+    command line."""
+    parser.add_argument(
+        "--password",
+        default=os.environ.get(PASSWORD_ENV) or None,
+        help=f"ETS project password for an encrypted project (default: ${PASSWORD_ENV})",
+    )
+
+
 def _load_project(path: Path, password: str | None) -> dict[str, Any]:
     try:
         from xknxproject import XKNXProj
+        from xknxproject.exceptions import InvalidPasswordException
     except ImportError as exc:
         raise SystemExit(
             "xknxproject is not installed. Install the tools extra:\n"
@@ -37,8 +53,18 @@ def _load_project(path: Path, password: str | None) -> dict[str, Any]:
             f"(import error: {exc})"
         ) from exc
 
+    if not path.is_file():
+        raise SystemExit(f"{path}: no such file")
     project = XKNXProj(path=str(path), password=password) if password else XKNXProj(path=str(path))
-    return project.parse()
+    try:
+        return project.parse()
+    except InvalidPasswordException as exc:
+        if password:
+            raise SystemExit(f"{path}: the ETS project password is wrong") from exc
+        raise SystemExit(
+            f"{path}: the ETS project is password-protected — pass --password or set "
+            f"${PASSWORD_ENV}"
+        ) from exc
 
 
 def _extract(
@@ -332,7 +358,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--output", "-o", required=True, type=Path, help="Path to ga-catalog.yaml output"
     )
-    parser.add_argument("--password", default=None, help="ETS project password (if encrypted)")
+    add_password_argument(parser)
     parser.add_argument(
         "--ignore-write-from",
         action="append",
