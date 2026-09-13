@@ -17,6 +17,10 @@ Findings, per device:
 - **misflagged** — linked, but to an object without the flag its
   direction needs: a consumed address (``--write-gas``) needs a
   Write-flagged object, everything else a Transmit-flagged one.
+- **misplaced** — linked to the device, but not to the object the
+  configuration puts it on: a type change moved the address to a new
+  collector and the link still sits on the old one. Flags may still
+  match, so only the object number tells.
 - **cross-linked** — linked to an object of the *opposite* direction as
   well. The wanted flag being present is not enough: a status address
   that also hangs on the receiving collector makes the catalog call it
@@ -30,8 +34,11 @@ the device is imported.
 
 Devices are given exactly as to ``knxproj-to-kaenx``; the footprints
 are grouped with the generator's own collector logic, so ``--todo-dir``
-can write a per-device rest worksheet — the same object numbers and
-texts as on the generated device, listing only the links still to make.
+can write a per-device rest worksheet listing only the links still to
+make. Objects are matched to the device in the export by name, so the
+numbers in the findings are the ones ETS shows today — also while the
+device in the project is still an older version whose numbering
+differs; an object that version does not have yet is marked as such.
 
 Example:
     knxproj-check-wiring --input project.knxproj --write-gas consumed.txt \\
@@ -59,7 +66,6 @@ from knx_nats_bridge.tools.knxproj_to_kaenx import (
     installed_objects,
     parse_device_spec,
     read_ga_list,
-    read_registry,
 )
 from knx_nats_bridge.tools.knxproj_to_yaml import _load_project, add_password_argument
 
@@ -85,6 +91,10 @@ class CheckReport:
     extra: list[tuple[str, str]] = field(default_factory=list)  # (ga, ETS name)
     misflagged: list[tuple[str, str]] = field(default_factory=list)  # (ga, missing flag)
     cross_linked: list[tuple[str, str]] = field(default_factory=list)  # (ga, forbidden flag)
+    # (ga, expected object number, object numbers it is linked to instead)
+    misplaced: list[tuple[str, int, list[int]]] = field(default_factory=list)
+    # collectors the device in the project does not have — a newer version has them
+    unpublished: list[Collector] = field(default_factory=list)
 
     @property
     def open_links(self) -> int:
@@ -98,6 +108,7 @@ class CheckReport:
             or self.extra
             or self.misflagged
             or self.cross_linked
+            or self.misplaced
             or self.skipped
         )
 
@@ -146,7 +157,6 @@ def check_device(
     project_data: Mapping[str, Any],
     spec: DeviceSpec,
     write_gas: frozenset[str],
-    registry: dict[str, int] | None = None,
     installed: Mapping[int, str] | None = None,
 ) -> CheckReport:
     report = CheckReport()
@@ -156,7 +166,7 @@ def check_device(
         return report
 
     build = DeviceReport()
-    collectors = build_collectors(spec, project_data, write_gas, build, registry, installed)
+    collectors = build_collectors(spec, project_data, write_gas, build, installed)
     report.objects = build.objects
     report.links_expected = build.links
     report.missing_from_ets = build.missing
@@ -165,7 +175,14 @@ def check_device(
 
     footprint: set[str] = set()
     for collector in collectors:
+        # The number the object has on the device in the project; for
+        # one that version lacks, the number it gets on the next.
         number = collector.number
+        if installed:
+            if collector.installed_number is None:
+                report.unpublished.append(collector)
+            else:
+                number = collector.installed_number
         expected = _DIRECTIONS[collector.direction][1]
         open_entries: list[tuple[str, str]] = []
         for ga, name in collector.entries:
@@ -179,6 +196,9 @@ def check_device(
                         report.misflagged.append((ga, flag))
                 elif _has_flag(links[ga], flag):
                     report.cross_linked.append((ga, flag))
+            on = sorted({int(co.get("number") or 0) for co in links[ga] if isinstance(co, dict)})
+            if number not in on:
+                report.misplaced.append((ga, number, on))
         if open_entries:
             report.todo.append((number, collector, open_entries))
 
@@ -204,10 +224,11 @@ def todo_worksheet(spec: DeviceSpec, report: CheckReport) -> str:
         f"{report.open_links} auf {len(report.todo)} Objekten.",
     ]
     for number, collector, entries in report.todo:
+        marker = " — erst in der neuen Version" if collector in report.unpublished else ""
         lines += [
             "",
             f"## Objekt {number}: {collector.text} ({len(entries)} von "
-            f"{len(collector.entries)} offen)",
+            f"{len(collector.entries)} offen){marker}",
             "",
         ]
         lines += [f"- [ ] `{ga}` {name}" for ga, name in entries]
@@ -216,6 +237,12 @@ def todo_worksheet(spec: DeviceSpec, report: CheckReport) -> str:
         lines += ["", "## Am falschen Objekt (Flag fehlt)", ""]
         lines += [
             f"- `{ga}` — gehört auf das {flag_label[flag]}-Objekt" for ga, flag in report.misflagged
+        ]
+    if report.misplaced:
+        lines += ["", "## Am falschen Objekt (umhängen)", ""]
+        lines += [
+            f"- `{ga}` — gehört auf Objekt {wanted}, hängt an {', '.join(map(str, on))}"
+            for ga, wanted, on in report.misplaced
         ]
     if report.cross_linked:
         lines += ["", "## Zusätzlich am Gegenrichtungs-Objekt (Verknüpfung dort lösen)", ""]
@@ -273,12 +300,6 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
-        "--registry",
-        type=Path,
-        default=None,
-        help="The generator's object registry, so worksheets carry the device's numbers",
-    )
-    parser.add_argument(
         "--todo-dir",
         type=Path,
         default=None,
@@ -306,20 +327,13 @@ def main(argv: list[str] | None = None) -> int:
 
     logger.info("parsing %s", args.input)
     project_data = _load_project(args.input, args.password)
-    registry = read_registry(args.registry) if args.registry else None
     if args.todo_dir is not None:
         args.todo_dir.mkdir(parents=True, exist_ok=True)
 
     clean = True
     for spec in specs:
-        # A copy: the check never writes the registry, the generator does.
-        device_registry: dict[str, int] | None = None
-        if registry is not None and spec.name in registry:
-            device_registry = dict(registry[spec.name].objects)
-        elif registry is not None:
-            device_registry = {}
         installed = installed_objects(args.input, project_data, spec.slug)
-        report = check_device(project_data, spec, write_gas, device_registry, installed)
+        report = check_device(project_data, spec, write_gas, installed)
         if not report.device_found:
             logger.error(
                 "%s: no device with order number %s in the project — import it "
@@ -349,17 +363,27 @@ def main(argv: list[str] | None = None) -> int:
             todo_hint = str(todo_path)
         logger.error(
             "%s: %d of %d links open on %d objects, %d misflagged, %d cross-linked, "
-            "%d unclaimed, %d not in ETS%s",
+            "%d misplaced, %d unclaimed, %d not in ETS%s",
             spec.name,
             report.open_links,
             report.links_expected,
             len(report.todo),
             len(report.misflagged),
             len(report.cross_linked),
+            len(report.misplaced),
             len(report.extra),
             len(report.missing_from_ets) + len(report.skipped),
             f" -> {todo_hint}" if todo_hint else "",
         )
+        if report.unpublished:
+            logger.error(
+                "%s: %d object(s) are not on the device in the project — a newer version "
+                "has them; publish and rebuild the device first: %s",
+                spec.name,
+                len(report.unpublished),
+                ", ".join(f"{c.number} {c.text}" for c in report.unpublished[:6])
+                + (" …" if len(report.unpublished) > 6 else ""),
+            )
         if todo_hint is None:
             open_flat = [ga for _, _, entries in report.todo for ga, _ in entries]
             _log_capped(spec.name, "not linked in ETS", open_flat, None)
@@ -373,6 +397,12 @@ def main(argv: list[str] | None = None) -> int:
                 spec.name,
                 "cross-linked",
                 [f"{ga} (also on the {flag} object)" for ga, flag in report.cross_linked],
+                None,
+            )
+            _log_capped(
+                spec.name,
+                "misplaced",
+                [f"{ga} (belongs on object {n}, is on {on})" for ga, n, on in report.misplaced],
                 None,
             )
             _log_capped(spec.name, "linked but unclaimed", [ga for ga, _ in report.extra], None)

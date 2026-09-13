@@ -12,9 +12,10 @@ from knx_nats_bridge.tools.knxproj_to_kaenx import parse_device_spec
 def _project_data() -> dict[str, Any]:
     """A partially wired bridge device as xknxproject's parse() delivers it."""
 
-    def co(device: str, write: bool = False, transmit: bool = False) -> dict[str, Any]:
+    def co(device: str, number: int, write: bool = False, transmit: bool = False) -> dict[str, Any]:
         return {
             "device_address": device,
+            "number": number,
             "flags": {"write": write, "transmit": transmit, "communication": True},
         }
 
@@ -55,9 +56,9 @@ def _project_data() -> dict[str, Any]:
             "2": {"name": "Schalten", "group_ranges": {}},
         },
         "communication_objects": {
-            "co-t": co("1.1.162", transmit=True),
-            "co-w": co("1.1.162", write=True),
-            "co-other": co("1.1.20", write=True),
+            "co-t": co("1.1.162", 1, transmit=True),
+            "co-w": co("1.1.162", 3, write=True),
+            "co-other": co("1.1.20", 1, write=True),
         },
         "devices": {
             "1.1.162": {"name": "KNX-NATS-Bridge", "order_number": "KNX-NATS-BRIDGE"},
@@ -89,6 +90,7 @@ def test_all_finding_classes(tmp_path: Path) -> None:
     # flag is missing and the Transmit flag is one it must not carry.
     assert report.misflagged == [("15/6/25", "write")]
     assert report.cross_linked == [("15/6/25", "transmit")]
+    assert report.misplaced == [("15/6/25", 4, [1])]
     assert report.extra == [("9/9/9", "Alt.Verwaist")]
     assert report.missing_from_ets == ["7/7/7"]
     assert not report.clean
@@ -151,3 +153,53 @@ def test_unimported_device_is_reported(tmp_path: Path) -> None:
     report = check_device(_project_data(), spec, frozenset())
     assert report.device_found is False
     assert not report.clean
+
+
+def test_misplaced_link_is_reported(tmp_path: Path) -> None:
+    """After a type change the address belongs on a new collector, but its
+    link still sits on the old object: flags match, the number does not."""
+    data = _project_data()
+    # 0/0/251 and a second Zentral address of another subtype: two
+    # collectors, numbered 1 and 2; both links sit on object 1.
+    data["group_addresses"]["0/0/253"] = {
+        "name": "Zentral.Trigger",
+        "dpt": {"main": 1, "sub": 17},
+        "communication_object_ids": ["co-t"],
+    }
+    ga_file = tmp_path / "footprint.txt"
+    ga_file.write_text("0/0/251\n0/0/253\n", encoding="utf-8")
+    spec = parse_device_spec(f"@{ga_file}=KNX-NATS-Bridge:split", 100)
+    report = check_device(data, spec, frozenset())
+
+    assert report.misflagged == [] and report.cross_linked == []
+    assert report.misplaced == [("0/0/253", 2, [1])]
+    assert not report.clean
+    sheet = todo_worksheet(spec, report)
+    assert "- `0/0/253` — gehört auf Objekt 2, hängt an 1" in sheet
+
+
+def test_older_installed_version_is_checked_by_object_name(tmp_path: Path) -> None:
+    """The device in the project is the previous version: its numbers
+    differ from the generated ones, and one object exists only in the
+    new version. Findings carry the numbers ETS shows today."""
+    data = _project_data()
+    data["group_addresses"]["0/0/253"] = {
+        "name": "Zentral.Trigger",
+        "dpt": {"main": 1, "sub": 17},
+        "communication_object_ids": ["co-t"],
+    }
+    ga_file = tmp_path / "footprint.txt"
+    ga_file.write_text("0/0/251\n0/0/253\n4/2/60\n", encoding="utf-8")
+    spec = parse_device_spec(f"@{ga_file}=KNX-NATS-Bridge:split", 100)
+    # Generated: 1 = hg0 1.001 sendet, 2 = hg0 1.017 sendet, 3 = hg4 1.001
+    # empfängt. Installed without the 1.017 object, under other numbers.
+    installed = {1: "hg0-dpt1.001-transmit", 3: "hg4-dpt1.001-write"}
+    report = check_device(data, spec, frozenset({"4/2/60"}), installed)
+
+    # 0/0/251 on installed object 1, 4/2/60 on installed object 3: fine.
+    # 0/0/253 hangs on object 1 but belongs on the new version's object 2.
+    assert report.misplaced == [("0/0/253", 2, [1])]
+    assert [c.key for c in report.unpublished] == ["hg0-dpt1.017-transmit"]
+    assert report.todo == []
+    sheet = todo_worksheet(spec, report)
+    assert "- `0/0/253` — gehört auf Objekt 2, hängt an 1" in sheet

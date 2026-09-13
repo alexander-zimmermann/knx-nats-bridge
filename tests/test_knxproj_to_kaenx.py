@@ -362,7 +362,7 @@ def test_wiring_worksheet_lists_addresses_per_collector() -> None:
     assert "- `0/3/0` — no DPT assigned in ETS" in sheet
 
 
-# --- object registry and loss guard -----------------------------------------
+# --- positional numbers against the installed device -----------------------
 
 
 def test_parse_collector_key_accepts_both_spellings() -> None:
@@ -380,80 +380,64 @@ def test_parse_collector_key_accepts_both_spellings() -> None:
     assert parse_collector_key("Logik B - Eingangslogik 1") is None
 
 
-def _registry_build(registry: dict[str, int] | None, installed: dict[int, str] | None) -> Any:
+def _build_against(installed: dict[int, str] | None) -> Any:
     from knx_nats_bridge.tools.knxproj_to_kaenx import DeviceReport, build_collectors
 
     spec = parse_device_spec("bridge placeholder=KNX-NATS-Bridge:split", 100)
     report = DeviceReport()
-    collectors = build_collectors(
-        spec, _project_data(), frozenset({"4/2/60"}), report, registry, installed
-    )
+    collectors = build_collectors(spec, _project_data(), frozenset({"4/2/60"}), report, installed)
     return collectors, report
 
 
-def test_registry_keeps_numbers_and_appends_new() -> None:
-    # The device is installed with two objects in an order the positional
-    # numbering would not produce; a third collector is new.
-    registry: dict[str, int] = {}
-    installed = {1: "hg4-dpt1.001-write", 2: "hg0-dpt9.001-transmit"}
-    collectors, report = _registry_build(registry, installed)
-    assert [(c.number, c.key) for c in collectors] == [
-        (1, "hg4-dpt1.001-write"),
-        (2, "hg0-dpt9.001-transmit"),
-        (3, "hg0-dpt9.xxx-transmit"),
+def test_numbers_are_positional_and_the_installed_device_tells_the_change() -> None:
+    # Installed with two of the three objects, in an order the positional
+    # numbering does not produce, plus one the configuration dropped.
+    installed = {1: "hg4-dpt1.001-write", 2: "hg0-dpt9.001-transmit", 3: "hg2-dpt1-both"}
+    collectors, report = _build_against(installed)
+    assert [(c.number, c.key, c.installed_number) for c in collectors] == [
+        (1, "hg0-dpt9.xxx-transmit", None),
+        (2, "hg0-dpt9.001-transmit", 2),
+        (3, "hg4-dpt1.001-write", 1),
     ]
-    assert registry == {
-        "hg4-dpt1.001-write": 1,
-        "hg0-dpt9.001-transmit": 2,
-        "hg0-dpt9.xxx-transmit": 3,
-    }
     assert [c.key for c in report.new_objects] == ["hg0-dpt9.xxx-transmit"]
-    assert report.lost == []
+    assert [c.key for c in report.renumbered] == ["hg4-dpt1.001-write"]
+    # The dropped object is named as ETS shows it, with its old number.
+    assert report.lost == [(3, "Hauptgruppe 2 · 1.xxx", 0)]
 
 
-def test_registry_keeps_orphaned_objects_as_legacy() -> None:
-    registry = {"hg7-dpt1-both": 1, "hg0-dpt9.001-transmit": 2}
-    collectors, report = _registry_build(registry, None)
-    legacy = collectors[0]
-    assert legacy.number == 1 and legacy.legacy and legacy.entries == []
-    assert legacy.key == "hg7-dpt1.xxx-both" and legacy.text == "Hauptgruppe 7 · 1.xxx"
-    assert [c.number for c in collectors] == [1, 2, 3, 4]
+def test_without_an_installed_device_nothing_is_new() -> None:
+    collectors, report = _build_against(None)
+    assert [c.number for c in collectors] == [1, 2, 3]
+    assert all(c.installed_number is None for c in collectors)
+    assert report.new_objects == [] and report.renumbered == [] and report.lost == []
 
 
-def test_installed_object_dropped_by_new_version_is_reported() -> None:
-    # Installed object 1 is a kind the configuration no longer produces and
-    # the registry does not know: the new version would renumber past it.
-    installed = {1: "hg2-dpt1-both", 2: "hg0-dpt9.001-transmit"}
-    _, report = _registry_build(None, installed)
-    assert (1, "hg2-dpt1.xxx-both", 0) in report.lost
-    # With a registry the installed object is seeded and kept instead.
-    _, report = _registry_build({}, installed)
-    assert report.lost == []
+def test_wiring_worksheet_maps_old_numbers() -> None:
+    from knx_nats_bridge.tools.knxproj_to_kaenx import DeviceReport, build_collectors
+
+    spec = parse_device_spec("bridge placeholder=KNX-NATS-Bridge:split", 100)
+    report = DeviceReport()
+    installed = {1: "hg4-dpt1.001-write", 2: "hg0-dpt9.001-transmit", 3: "hg2-dpt1-both"}
+    build_collectors(spec, _project_data(), frozenset({"4/2/60"}), report, installed)
+    sheet = wiring_worksheet(spec, report)
+    assert "1 neu, 1 umnummeriert, 1 entfallen" in sheet
+    assert "## Objekt 1: Zentral · 9.xxx · sendet (1 GAs) — NEU" in sheet
+    assert "## Objekt 2: Zentral · 9.001 · sendet (1 GAs)\n" in sheet
+    assert "## Objekt 3: Bordbar · 1.001 · empfängt (1 GAs) — war 1" in sheet
+    assert "## Entfallene Objekte" in sheet
+    assert "- Objekt 3: Hauptgruppe 2 · 1.xxx" in sheet
 
 
-def test_registry_conflict_is_refused() -> None:
-    registry = {"hg0-dpt9.001-transmit": 5}
-    with pytest.raises(SystemExit, match="registry holds it as number 5"):
-        _registry_build(registry, {1: "hg0-dpt9.001-transmit"})
+def test_versions_round_trip(tmp_path: Any) -> None:
+    from knx_nats_bridge.tools.knxproj_to_kaenx import read_versions, write_versions
 
-
-def test_registry_round_trip(tmp_path: Any) -> None:
-    from knx_nats_bridge.tools.knxproj_to_kaenx import (
-        DeviceRegistry,
-        read_registry,
-        write_registry,
-    )
-
-    path = tmp_path / "objects.yaml"
-    assert read_registry(path) == {}
-    section = DeviceRegistry(17, {"hg1-dpt1.001-both": 2, "hg0-dpt1.001-both": 1})
-    write_registry(path, {"Dev": section})
+    path = tmp_path / "versions.yaml"
+    assert read_versions(path) == {}
+    write_versions(path, {"Node-Red": 20, "Basalte Core S4": 18})
     text = path.read_text(encoding="utf-8")
-    assert text.startswith("# The generated ETS devices")
-    assert text.index("hg0-dpt1.001-both: 1") < text.index("hg1-dpt1.001-both: 2")
-    back = read_registry(path)
-    assert back["Dev"].version == 17
-    assert back["Dev"].objects == {"hg0-dpt1.001-both": 1, "hg1-dpt1.001-both": 2}
+    assert text.startswith("# The application version")
+    assert text.index("Basalte Core S4: 18") < text.index("Node-Red: 20")
+    assert read_versions(path) == {"Basalte Core S4": 18, "Node-Red": 20}
 
 
 def test_version_bumps_only_on_change() -> None:
@@ -475,7 +459,7 @@ def test_version_bumps_only_on_change() -> None:
         _template(), spec, data, write_gas, installed={1: "hg0-dpt9.xxx-transmit"}
     )
     assert report.app_version == 0x12
-    # … unless the registry knows a higher version was already published.
+    # … unless the versions file knows a higher one was already published.
     model, report = build_device_model(
         _template(), spec, data, write_gas, installed={1: "hg0-dpt9.xxx-transmit"}, published=0x13
     )
