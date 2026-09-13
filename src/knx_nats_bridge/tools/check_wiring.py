@@ -61,6 +61,7 @@ from knx_nats_bridge.tools.knxproj_to_kaenx import (
     _ga_sort_key,
     build_collectors,
     installed_objects,
+    object_identity,
     parse_device_spec,
     read_ga_list,
     read_registry,
@@ -127,12 +128,12 @@ def _device_links(
         if isinstance(co, dict) and str(co.get("device_address")) in addresses
     }
 
-    links: dict[str, list[Any]] = {}
+    links: dict[str, list[tuple[str, Any]]] = {}
     for ga, info in (project_data.get("group_addresses", {}) or {}).items():
         if not isinstance(info, dict):
             continue
         linked = [
-            comm_objects[str(co_id)]
+            (str(co_id), comm_objects[str(co_id)])
             for co_id in info.get("communication_object_ids") or []
             if str(co_id) in matching_co_ids
         ]
@@ -141,8 +142,8 @@ def _device_links(
     return links, bool(addresses)
 
 
-def _has_flag(linked: list[Any], flag: str) -> bool:
-    for co in linked:
+def _has_flag(linked: list[tuple[str, Any]], flag: str) -> bool:
+    for _, co in linked:
         flags = co.get("flags") if isinstance(co, dict) else None
         if isinstance(flags, dict) and flags.get(flag):
             return True
@@ -155,6 +156,7 @@ def check_device(
     write_gas: frozenset[str],
     registry: dict[str, int] | None = None,
     installed: Mapping[int, str] | None = None,
+    sorted_display: bool = False,
 ) -> CheckReport:
     report = CheckReport()
     links, device_found = _device_links(project_data, spec.slug)
@@ -163,7 +165,10 @@ def check_device(
         return report
 
     build = DeviceReport()
-    collectors = build_collectors(spec, project_data, write_gas, build, registry, installed)
+    collectors = build_collectors(
+        spec, project_data, write_gas, build, registry, installed, sorted_display
+    )
+    shown = {c.number: c.display for c in collectors}
     report.objects = build.objects
     report.links_expected = build.links
     report.missing_from_ets = build.missing
@@ -172,7 +177,7 @@ def check_device(
 
     footprint: set[str] = set()
     for collector in collectors:
-        number = collector.number
+        number = collector.display
         expected = _DIRECTIONS[collector.direction][1]
         open_entries: list[tuple[str, str]] = []
         for ga, name in collector.entries:
@@ -186,9 +191,9 @@ def check_device(
                         report.misflagged.append((ga, flag))
                 elif _has_flag(links[ga], flag):
                     report.cross_linked.append((ga, flag))
-            on = sorted({int(co.get("number") or 0) for co in links[ga] if isinstance(co, dict)})
-            if number not in on:
-                report.misplaced.append((ga, number, on))
+            on = sorted({i for co_id, _ in links[ga] if (i := object_identity(co_id)) is not None})
+            if collector.number not in on:
+                report.misplaced.append((ga, number, [shown.get(i, i) for i in on]))
         if open_entries:
             report.todo.append((number, collector, open_entries))
 
@@ -295,6 +300,12 @@ def main(argv: list[str] | None = None) -> int:
         help="The generator's object registry, so worksheets carry the device's numbers",
     )
     parser.add_argument(
+        "--number-by",
+        choices=("registry", "sorted"),
+        default="registry",
+        help="As given to knxproj-to-kaenx, so worksheets show the Numbers ETS shows",
+    )
+    parser.add_argument(
         "--todo-dir",
         type=Path,
         default=None,
@@ -335,7 +346,14 @@ def main(argv: list[str] | None = None) -> int:
         elif registry is not None:
             device_registry = {}
         installed = installed_objects(args.input, project_data, spec.slug)
-        report = check_device(project_data, spec, write_gas, device_registry, installed)
+        report = check_device(
+            project_data,
+            spec,
+            write_gas,
+            device_registry,
+            installed,
+            sorted_display=args.number_by == "sorted",
+        )
         if not report.device_found:
             logger.error(
                 "%s: no device with order number %s in the project — import it "

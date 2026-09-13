@@ -481,3 +481,37 @@ def test_version_bumps_only_on_change() -> None:
     )
     assert report.app_version == 0x14
     assert model["Application"]["ReplacesVersions"] == "16 17 18 19"
+
+
+def test_sorted_display_keeps_identity() -> None:
+    """A new kind that sorts first gets shown as Number 1, but the
+    installed objects keep their identities — the Ids links refer to."""
+    from knx_nats_bridge.tools.knxproj_to_kaenx import DeviceReport, build_collectors
+
+    spec = parse_device_spec("bridge placeholder=KNX-NATS-Bridge:split", 100)
+    registry: dict[str, int] = {}
+    # Installed: the write collector is identity 1, the 9.001 one is 2.
+    installed = {1: "hg4-dpt1.001-write", 2: "hg0-dpt9.001-transmit"}
+    report = DeviceReport()
+    collectors = build_collectors(
+        spec, _project_data(), frozenset({"4/2/60"}), report, registry, installed, True
+    )
+    # Shown in collector order; identities unchanged; the new one appended.
+    assert [(c.display, c.number, c.key) for c in collectors] == [
+        (1, 3, "hg0-dpt9.xxx-transmit"),
+        (2, 2, "hg0-dpt9.001-transmit"),
+        (3, 1, "hg4-dpt1.001-write"),
+    ]
+    model, _ = build_device_model(
+        _template(),
+        spec,
+        _project_data(),
+        frozenset({"4/2/60"}),
+        registry=dict(registry),
+        installed=installed,
+        sorted_display=True,
+    )
+    objects = model["Application"]["ComObjects"]
+    assert [(o["Number"], o["Id"], o["UId"]) for o in objects] == [(1, 3, 3), (2, 2, 2), (3, 1, 1)]
+    assert [r["ComObject"] for r in model["Application"]["ComObjectRefs"]] == [3, 2, 1]
+    assert model["Application"]["HighestComNumber"] == 3

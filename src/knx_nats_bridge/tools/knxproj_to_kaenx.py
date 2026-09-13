@@ -329,7 +329,8 @@ class Collector:
     dpt_main: int
     dpt_sub: int | None  # None collects the addresses without a (known) subtype
     direction: str  # key into _DIRECTIONS
-    number: int = 0  # ETS object number; assigned by the registry, else by position
+    number: int = 0  # the object's identity in ETS (its Id); from the registry, else by position
+    display: int = 0  # the Number ETS shows; equals number unless display numbers are sorted
     text: str = ""
     entries: list[tuple[str, str]] = field(default_factory=list)  # (ga, ETS name)
     legacy: bool = False  # kept from the registry, no address of the configuration
@@ -478,7 +479,8 @@ def _translation(language: Mapping[str, Any], text: str) -> dict[str, Any]:
     }
 
 
-def _com_object(number: int, collector: Collector, language: Mapping[str, Any]) -> dict[str, Any]:
+def _com_object(collector: Collector, language: Mapping[str, Any]) -> dict[str, Any]:
+    number, display = collector.number, collector.display
     function_text, flags = _DIRECTIONS[collector.direction]
     sub = collector.dpt_sub
     return {
@@ -490,7 +492,7 @@ def _com_object(number: int, collector: Collector, language: Mapping[str, Any]) 
         "TranslationText": False,
         "FunctionText": [_translation(language, function_text)],
         "TranslationFunctionText": False,
-        "Number": number,
+        "Number": display,
         "FlagRead": flags.get("read", False),
         "FlagWrite": flags.get("write", False),
         "FlagTrans": flags.get("transmit", False),
@@ -671,9 +673,15 @@ def build_collectors(
     report: DeviceReport,
     registry: dict[str, int] | None = None,
     installed: Mapping[int, str] | None = None,
+    sorted_display: bool = False,
 ) -> list[Collector]:
     """Resolve the device's addresses and group them into the ordered,
     numbered collector list; counts and gaps land on ``report``.
+
+    With ``sorted_display`` the Number ETS shows follows the collector
+    order (main group, type, direction) while the identity stays the
+    registry number — so the list reads in order and links still find
+    their object. Otherwise the shown Number is the identity.
 
     Shared between generation and the wiring check so both see the
     identical objects — same cut, same order, same numbers.
@@ -750,15 +758,7 @@ def build_collectors(
     # before its subtypes), sending before receiving. It numbers a
     # device without a registry, and decides the order in which new
     # collectors take the next free numbers.
-    ordered = sorted(
-        collectors.values(),
-        key=lambda c: (
-            c.main_group,
-            c.dpt_main,
-            -1 if c.dpt_sub is None else c.dpt_sub,
-            c.direction == "write",
-        ),
-    )
+    ordered = sorted(collectors.values(), key=_collector_sort_key)
     # Installed names in the first generation's spelling mean the same
     # object as today's key; compare and register them normalised.
     installed = {
@@ -774,6 +774,15 @@ def build_collectors(
         hg_name = hg_names.get(collector.main_group, f"Hauptgruppe {collector.main_group}")
         suffix = {"write": " · empfängt", "transmit": " · sendet"}.get(collector.direction, "")
         collector.text = f"{hg_name} · {collector.dpt_label}{suffix}"
+    if sorted_display:
+        by_kind = sorted(ordered, key=_collector_sort_key)
+        for position, collector in enumerate(by_kind, start=1):
+            collector.display = position
+        ordered = by_kind
+    else:
+        for collector in ordered:
+            collector.display = collector.number
+        ordered = sorted(ordered, key=lambda c: c.number)
     if installed:
         emitted = {c.number: c.key for c in ordered}
         report.new_objects = [c for c in ordered if c.number not in installed]
@@ -785,6 +794,15 @@ def build_collectors(
     report.objects = len(ordered)
     report.collectors = ordered
     return ordered
+
+
+def _collector_sort_key(c: Collector) -> tuple[int, int, int, bool]:
+    return (
+        c.main_group,
+        c.dpt_main,
+        -1 if c.dpt_sub is None else c.dpt_sub,
+        c.direction == "write",
+    )
 
 
 def _number_from_registry(
@@ -833,9 +851,11 @@ def _number_from_registry(
 def installed_objects(
     knxproj: Path, project_data: Mapping[str, Any], order_number: str
 ) -> dict[int, str]:
-    """{object number -> key} of the application installed on the device
+    """{object identity -> key} of the application installed on the device
     with that order number, read from the product data in the export;
-    empty when the device is not in the project."""
+    empty when the device is not in the project. The identity is the
+    object's Id (``…_O-7``), which links refer to — not the Number ETS
+    shows, which may be sorted for display."""
     application_id = next(
         (
             str(device.get("application") or "")
@@ -855,10 +875,20 @@ def installed_objects(
     objects: dict[int, str] = {}
     for tag in re.findall(r"<ComObject\b[^>]*/?>", xml):
         name = re.search(r'\bName="([^"]*)"', tag)
-        number = re.search(r'\bNumber="(\d+)"', tag)
-        if name and number:
-            objects[int(number.group(1))] = name.group(1)
+        identity = re.search(r'\bId="[^"]*_O-(\d+)"', tag)
+        if name and identity:
+            objects[int(identity.group(1))] = name.group(1)
     return objects
+
+
+_CO_IDENTITY_RE = re.compile(r"O-(\d+)_R-\d+$")
+
+
+def object_identity(co_id: str) -> int | None:
+    """The object identity behind a communication object id as xknxproject
+    keys it (``1.1.161/O-7_R-7`` -> 7)."""
+    match = _CO_IDENTITY_RE.search(co_id)
+    return int(match.group(1)) if match else None
 
 
 def installed_links(project_data: Mapping[str, Any], order_number: str) -> dict[int, int]:
@@ -869,10 +899,13 @@ def installed_links(project_data: Mapping[str, Any], order_number: str) -> dict[
         if isinstance(device, dict) and device.get("order_number") == order_number
     }
     counts: dict[int, int] = {}
-    for co in (project_data.get("communication_objects", {}) or {}).values():
+    for co_id, co in (project_data.get("communication_objects", {}) or {}).items():
         if isinstance(co, dict) and str(co.get("device_address")) in addresses:
-            number = int(co.get("number") or 0)
-            counts[number] = counts.get(number, 0) + len(co.get("group_address_links") or [])
+            identity = object_identity(str(co_id))
+            if identity is not None:
+                counts[identity] = counts.get(identity, 0) + len(
+                    co.get("group_address_links") or []
+                )
     return counts
 
 
@@ -885,6 +918,7 @@ def build_device_model(
     registry: dict[str, int] | None = None,
     installed: Mapping[int, str] | None = None,
     published: int = 0,
+    sorted_display: bool = False,
 ) -> tuple[dict[str, Any], DeviceReport]:
     """Fill a copy of the template with one collector object per
     (main group, datapoint type, direction). ``published`` is the
@@ -895,8 +929,10 @@ def build_device_model(
     language = dict(application["Languages"][0])
     report = DeviceReport()
 
-    ordered = build_collectors(spec, project_data, write_gas, report, registry, installed)
-    com_objects = [_com_object(collector.number, collector, language) for collector in ordered]
+    ordered = build_collectors(
+        spec, project_data, write_gas, report, registry, installed, sorted_display
+    )
+    com_objects = [_com_object(collector, language) for collector in ordered]
 
     refs = [_com_object_ref(co, language) for co in com_objects]
     hg_names = _main_group_names(project_data)
@@ -915,7 +951,7 @@ def build_device_model(
     application["ComObjects"] = com_objects
     application["ComObjectRefs"] = refs
     application["Dynamics"] = _dynamics(blocks)
-    application["HighestComNumber"] = max((c.number for c in ordered), default=0)
+    application["HighestComNumber"] = max((c.display for c in ordered), default=0)
     # Application.Number is the version byte (0x10 = V 1.0; ETS shows
     # high.low nibble), not the application's identity — that is
     # Info.AppNumber. ETS silently refuses to re-import an application
@@ -980,7 +1016,7 @@ def wiring_worksheet(spec: DeviceSpec, report: DeviceReport) -> str:
             continue
         marker = " — NEU" if collector in report.new_objects else ""
         count = f"({len(collector.entries)} GAs)"
-        lines += ["", f"## Objekt {collector.number}: {collector.text} {count}{marker}", ""]
+        lines += ["", f"## Objekt {collector.display}: {collector.text} {count}{marker}", ""]
         lines += [f"- [ ] `{ga}` {name}" for ga, name in collector.entries]
     legacy = [c for c in report.collectors if c.legacy]
     if legacy:
@@ -989,7 +1025,7 @@ def wiring_worksheet(spec: DeviceSpec, report: DeviceReport) -> str:
             "## Altobjekte (keine Adresse der Konfiguration; bleiben für bestehende Links)",
             "",
         ]
-        lines += [f"- Objekt {c.number}: {c.text}" for c in legacy]
+        lines += [f"- Objekt {c.display}: {c.text}" for c in legacy]
     if report.skipped:
         lines += ["", "## Nicht aufgenommen", ""]
         lines += [f"- `{ga}` — {reason}" for ga, reason in report.skipped]
@@ -1055,6 +1091,16 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--number-by",
+        choices=("registry", "sorted"),
+        default="registry",
+        help=(
+            "What the Number ETS shows is: the object's identity from the registry "
+            "(default), or its position in the sorted collector order — identity "
+            "unchanged, only the shown Number follows the order."
+        ),
+    )
+    parser.add_argument(
         "--accept-loss",
         action="store_true",
         help=(
@@ -1104,6 +1150,7 @@ def main(argv: list[str] | None = None) -> int:
             registry=section.objects if section is not None else None,
             installed=installed,
             published=section.version if section is not None else 0,
+            sorted_display=args.number_by == "sorted",
         )
         if section is not None and report.app_version > section.version:
             section.version = report.app_version
@@ -1134,7 +1181,7 @@ def main(argv: list[str] | None = None) -> int:
                 "update the device: %s",
                 spec.name,
                 len(report.new_objects),
-                ", ".join(f"{c.number} {c.text}" for c in report.new_objects[:6])
+                ", ".join(f"{c.display} {c.text}" for c in report.new_objects[:6])
                 + (" …" if len(report.new_objects) > 6 else ""),
             )
         else:

@@ -25,40 +25,40 @@ def _project_data() -> dict[str, Any]:
             "0/0/251": {
                 "name": "Zentral.Fault",
                 "dpt": {"main": 1, "sub": 1},
-                "communication_object_ids": ["co-t"],
+                "communication_object_ids": ["1.1.162/O-1_R-1"],
             },
             # Consumed address, correctly on a Write collector.
             "4/2/60": {
                 "name": "Bordbar.OnOff",
                 "dpt": {"main": 1, "sub": 1},
-                "communication_object_ids": ["co-w"],
+                "communication_object_ids": ["1.1.162/O-3_R-3"],
             },
             # Consumed address linked to a Transmit collector: misflagged.
             "15/6/25": {
                 "name": "Wallbox.ModusPV",
                 "dpt": {"main": 1, "sub": 1},
-                "communication_object_ids": ["co-t"],
+                "communication_object_ids": ["1.1.162/O-1_R-1"],
             },
             # Linked to the device, but no configuration claims it.
             "9/9/9": {
                 "name": "Alt.Verwaist",
                 "dpt": {"main": 1, "sub": 1},
-                "communication_object_ids": ["co-t"],
+                "communication_object_ids": ["1.1.162/O-1_R-1"],
             },
             # In the footprint, exists in ETS, but linked elsewhere only.
             "2/0/1": {
                 "name": "Schalten.Zentral",
                 "dpt": {"main": 1, "sub": 1},
-                "communication_object_ids": ["co-other"],
+                "communication_object_ids": ["1.1.20/O-1_R-1"],
             },
         },
         "group_ranges": {
             "2": {"name": "Schalten", "group_ranges": {}},
         },
         "communication_objects": {
-            "co-t": co("1.1.162", 1, transmit=True),
-            "co-w": co("1.1.162", 3, write=True),
-            "co-other": co("1.1.20", 1, write=True),
+            "1.1.162/O-1_R-1": co("1.1.162", 1, transmit=True),
+            "1.1.162/O-3_R-3": co("1.1.162", 3, write=True),
+            "1.1.20/O-1_R-1": co("1.1.20", 1, write=True),
         },
         "devices": {
             "1.1.162": {"name": "KNX-NATS-Bridge", "order_number": "KNX-NATS-BRIDGE"},
@@ -111,7 +111,10 @@ def test_cross_link_beside_the_correct_one_is_caught(tmp_path: Path) -> None:
     catalog turned the address writable off the stray Write flag.
     """
     data = _project_data()
-    data["group_addresses"]["0/0/251"]["communication_object_ids"] = ["co-t", "co-w"]
+    data["group_addresses"]["0/0/251"]["communication_object_ids"] = [
+        "1.1.162/O-1_R-1",
+        "1.1.162/O-3_R-3",
+    ]
     ga_file = tmp_path / "footprint.txt"
     ga_file.write_text("0/0/251\n", encoding="utf-8")
     spec = parse_device_spec(f"@{ga_file}=KNX-NATS-Bridge:split", 100)
@@ -125,7 +128,10 @@ def test_cross_link_beside_the_correct_one_is_caught(tmp_path: Path) -> None:
 
 def test_both_mode_device_cannot_cross_link(tmp_path: Path) -> None:
     data = _project_data()
-    data["group_addresses"]["0/0/251"]["communication_object_ids"] = ["co-t", "co-w"]
+    data["group_addresses"]["0/0/251"]["communication_object_ids"] = [
+        "1.1.162/O-1_R-1",
+        "1.1.162/O-3_R-3",
+    ]
     ga_file = tmp_path / "footprint.txt"
     ga_file.write_text("0/0/251\n", encoding="utf-8")
     spec = parse_device_spec(f"@{ga_file}=KNX-NATS-Bridge:both", 100)
@@ -164,7 +170,7 @@ def test_misplaced_link_is_reported(tmp_path: Path) -> None:
     data["group_addresses"]["0/0/253"] = {
         "name": "Zentral.Trigger",
         "dpt": {"main": 1, "sub": 17},
-        "communication_object_ids": ["co-t"],
+        "communication_object_ids": ["1.1.162/O-1_R-1"],
     }
     ga_file = tmp_path / "footprint.txt"
     ga_file.write_text("0/0/251\n0/0/253\n", encoding="utf-8")
