@@ -17,6 +17,10 @@ Findings, per device:
 - **misflagged** — linked, but to an object without the flag its
   direction needs: a consumed address (``--write-gas``) needs a
   Write-flagged object, everything else a Transmit-flagged one.
+- **misplaced** — linked to the device, but not to the object the
+  configuration puts it on: a type change moved the address to a new
+  collector and the link still sits on the old one. Flags may still
+  match, so only the object number tells.
 - **cross-linked** — linked to an object of the *opposite* direction as
   well. The wanted flag being present is not enough: a status address
   that also hangs on the receiving collector makes the catalog call it
@@ -85,6 +89,8 @@ class CheckReport:
     extra: list[tuple[str, str]] = field(default_factory=list)  # (ga, ETS name)
     misflagged: list[tuple[str, str]] = field(default_factory=list)  # (ga, missing flag)
     cross_linked: list[tuple[str, str]] = field(default_factory=list)  # (ga, forbidden flag)
+    # (ga, expected object number, object numbers it is linked to instead)
+    misplaced: list[tuple[str, int, list[int]]] = field(default_factory=list)
 
     @property
     def open_links(self) -> int:
@@ -98,6 +104,7 @@ class CheckReport:
             or self.extra
             or self.misflagged
             or self.cross_linked
+            or self.misplaced
             or self.skipped
         )
 
@@ -179,6 +186,9 @@ def check_device(
                         report.misflagged.append((ga, flag))
                 elif _has_flag(links[ga], flag):
                     report.cross_linked.append((ga, flag))
+            on = sorted({int(co.get("number") or 0) for co in links[ga] if isinstance(co, dict)})
+            if number not in on:
+                report.misplaced.append((ga, number, on))
         if open_entries:
             report.todo.append((number, collector, open_entries))
 
@@ -216,6 +226,12 @@ def todo_worksheet(spec: DeviceSpec, report: CheckReport) -> str:
         lines += ["", "## Am falschen Objekt (Flag fehlt)", ""]
         lines += [
             f"- `{ga}` — gehört auf das {flag_label[flag]}-Objekt" for ga, flag in report.misflagged
+        ]
+    if report.misplaced:
+        lines += ["", "## Am falschen Objekt (umhängen)", ""]
+        lines += [
+            f"- `{ga}` — gehört auf Objekt {wanted}, hängt an {', '.join(map(str, on))}"
+            for ga, wanted, on in report.misplaced
         ]
     if report.cross_linked:
         lines += ["", "## Zusätzlich am Gegenrichtungs-Objekt (Verknüpfung dort lösen)", ""]
@@ -349,13 +365,14 @@ def main(argv: list[str] | None = None) -> int:
             todo_hint = str(todo_path)
         logger.error(
             "%s: %d of %d links open on %d objects, %d misflagged, %d cross-linked, "
-            "%d unclaimed, %d not in ETS%s",
+            "%d misplaced, %d unclaimed, %d not in ETS%s",
             spec.name,
             report.open_links,
             report.links_expected,
             len(report.todo),
             len(report.misflagged),
             len(report.cross_linked),
+            len(report.misplaced),
             len(report.extra),
             len(report.missing_from_ets) + len(report.skipped),
             f" -> {todo_hint}" if todo_hint else "",
@@ -373,6 +390,12 @@ def main(argv: list[str] | None = None) -> int:
                 spec.name,
                 "cross-linked",
                 [f"{ga} (also on the {flag} object)" for ga, flag in report.cross_linked],
+                None,
+            )
+            _log_capped(
+                spec.name,
+                "misplaced",
+                [f"{ga} (belongs on object {n}, is on {on})" for ga, n, on in report.misplaced],
                 None,
             )
             _log_capped(spec.name, "linked but unclaimed", [ga for ga, _ in report.extra], None)
