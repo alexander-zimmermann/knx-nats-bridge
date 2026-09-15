@@ -177,6 +177,11 @@ When `BRIDGE_WRITER_ENABLED=true`, the bridge also subscribes to NATS subjects
 and writes the decoded values back onto the KNX bus, driven by a rules file
 (`BRIDGE_WRITER_RULES_PATH`, validated against
 [src/knx_nats_bridge/\_schemas/writer-rules.schema.json](src/knx_nats_bridge/_schemas/writer-rules.schema.json)).
+The path may also be a **directory**: every `*.yaml` in it is loaded in name
+order as one rule set (other files are ignored; a directory without any
+`*.yaml` fails like a missing file). Each file is validated on its own, so an
+error names the file. One group address has one writer — a GA claimed by more
+than one rule fails the load, naming the files involved.
 
 ```yaml
 mappings:

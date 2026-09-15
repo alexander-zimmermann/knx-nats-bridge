@@ -77,3 +77,24 @@ def test_nkey_seed_file_accepted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     assert s.nats_nkey_seed_file == seed_file
     assert s.nats_nkey_seed_file is not None
     assert s.nats_nkey_seed_file.exists()
+
+
+def test_writer_rules_path_accepts_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("KNX_GATEWAY_HOST", "192.0.2.10")
+    monkeypatch.setenv("BRIDGE_WRITER_ENABLED", "true")
+    rules_dir = tmp_path / "writer-rules.d"
+    rules_dir.mkdir()
+    monkeypatch.setenv("BRIDGE_WRITER_RULES_PATH", str(rules_dir))
+    assert Settings().bridge_writer_rules_path == rules_dir
+
+
+def test_writer_enabled_requires_existing_rules_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("KNX_GATEWAY_HOST", "192.0.2.10")
+    monkeypatch.setenv("BRIDGE_WRITER_ENABLED", "true")
+    monkeypatch.setenv("BRIDGE_WRITER_RULES_PATH", str(tmp_path / "missing"))
+    with pytest.raises(ValidationError, match="does not exist"):
+        Settings()

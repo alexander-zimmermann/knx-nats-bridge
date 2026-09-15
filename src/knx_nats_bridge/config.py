@@ -41,6 +41,7 @@ class Settings(NatsSettings):
     # any cluster-side effect until the mapping is provisioned and the NATS
     # user has been granted the necessary subscribe permissions.
     bridge_writer_enabled: bool = False
+    # A single rules file, or a directory whose *.yaml files form one rule set.
     bridge_writer_rules_path: Path = Path("/etc/knx-nats-bridge/writer-rules.yaml")
 
     # Read responder (KNX -> KNX). When enabled, the bridge answers GroupValueRead
@@ -65,10 +66,10 @@ class Settings(NatsSettings):
         return self
 
     @model_validator(mode="after")
-    def _require_rules_file_when_writer_enabled(self) -> Settings:
+    def _require_rules_path_when_writer_enabled(self) -> Settings:
         if self.bridge_writer_enabled and not self.bridge_writer_rules_path.exists():
             raise ValueError(
-                f"BRIDGE_WRITER_ENABLED is true but rules file "
+                f"BRIDGE_WRITER_ENABLED is true but rules path "
                 f"{self.bridge_writer_rules_path} does not exist"
             )
         return self

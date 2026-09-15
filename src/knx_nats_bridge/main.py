@@ -53,9 +53,10 @@ async def _amain() -> int:
             reader_subject_prefix=settings.nats_subject_prefix,
         )
         logger.info(
-            "writer enabled: %d rules across %d subjects",
+            "writer enabled: %d rules across %d subjects from %s",
             len(writer_rules),
             len(writer_rules.subjects()),
+            settings.bridge_writer_rules_path,
         )
 
     writer: Writer | None = None
