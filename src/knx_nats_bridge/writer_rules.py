@@ -1,4 +1,4 @@
-"""Writer-rules loader: YAML file -> validated list of NATS-subject -> KNX-GA rules."""
+"""Writer-rules loader: YAML file or directory -> validated NATS-subject -> KNX-GA rules."""
 
 from __future__ import annotations
 
@@ -69,49 +69,89 @@ class WriterRules:
         reader_subject_prefix: str | None = None,
         schema_path: Path | None = None,
     ) -> WriterRules:
-        raw_text = path.read_text(encoding="utf-8")
-        data: Any = yaml.safe_load(raw_text) or {}
-        if not isinstance(data, dict):
-            raise ValueError(
-                f"{path}: expected a mapping at the top level, got {type(data).__name__}"
-            )
+        """Load one YAML file, or every `*.yaml` in a directory (sorted by name) as one set.
 
+        Each file is parsed and validated on its own so an error names the file;
+        a group address claimed by more than one rule is rejected across the set.
+        """
         schema_file = schema_path or _SCHEMA_PATH
-        if schema_file.exists():
-            schema = json.loads(schema_file.read_text(encoding="utf-8"))
-            jsonschema.validate(instance=data, schema=schema)
+        schema: dict[str, Any] | None = (
+            json.loads(schema_file.read_text(encoding="utf-8")) if schema_file.exists() else None
+        )
 
         rules: list[WriterRule] = []
-        for raw in data.get("mappings", []):
-            dpt = raw["dpt"]
-            if DPTBase.parse_transcoder(dpt) is None:
-                raise ValueError(f"{path}: unknown DPT {dpt!r} in rule for {raw['subject']!r}")
+        claimed_by: dict[str, list[Path]] = {}
+        for file in _rule_files(path):
+            for rule in _parse_file(file, schema, reader_subject_prefix):
+                claimed_by.setdefault(rule.ga, []).append(file)
+                rules.append(rule)
 
-            subject = raw["subject"]
-            # Loop-protection: a writer subscribed to the reader's own publish-prefix
-            # would re-trigger itself via the bus echo. Reject at load time.
-            if reader_subject_prefix and (
-                subject == reader_subject_prefix or subject.startswith(reader_subject_prefix + ".")
-            ):
-                raise ValueError(
-                    f"{path}: subject {subject!r} falls under reader prefix "
-                    f"{reader_subject_prefix!r} — would create a write/read loop"
-                )
-
-            rules.append(
-                WriterRule(
-                    subject=subject,
-                    ga=raw["ga"],
-                    dpt=dpt,
-                    payload_path=raw["payload_path"],
-                    description=raw.get("description"),
-                    min_delta=raw.get("min_delta"),
-                    min_delta_pct=raw.get("min_delta_pct"),
-                    seed_on_start=raw.get("seed_on_start", False),
-                )
+        duplicates = {ga: files for ga, files in claimed_by.items() if len(files) > 1}
+        if duplicates:
+            detail = "; ".join(
+                f"{ga} ({len(files)} rules) in {', '.join(dict.fromkeys(f.name for f in files))}"
+                for ga, files in duplicates.items()
             )
+            raise ValueError(f"{path}: group address claimed by more than one rule: {detail}")
 
         return cls(rules)
+
+
+def _rule_files(path: Path) -> list[Path]:
+    """The files to load: the path itself, or the `*.yaml` files of a directory."""
+    if not path.is_dir():
+        return [path]
+    files = sorted(p for p in path.iterdir() if p.is_file() and p.suffix == ".yaml")
+    if not files:
+        raise FileNotFoundError(f"{path}: no *.yaml rule files in directory")
+    return files
+
+
+def _parse_file(
+    path: Path, schema: dict[str, Any] | None, reader_subject_prefix: str | None
+) -> list[WriterRule]:
+    raw_text = path.read_text(encoding="utf-8")
+    data: Any = yaml.safe_load(raw_text) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: expected a mapping at the top level, got {type(data).__name__}")
+
+    if schema is not None:
+        try:
+            jsonschema.validate(instance=data, schema=schema)
+        except jsonschema.ValidationError as exc:
+            exc.message = f"{path}: {exc.message}"
+            raise
+
+    rules: list[WriterRule] = []
+    for raw in data.get("mappings", []):
+        dpt = raw["dpt"]
+        if DPTBase.parse_transcoder(dpt) is None:
+            raise ValueError(f"{path}: unknown DPT {dpt!r} in rule for {raw['subject']!r}")
+
+        subject = raw["subject"]
+        # Loop-protection: a writer subscribed to the reader's own publish-prefix
+        # would re-trigger itself via the bus echo. Reject at load time.
+        if reader_subject_prefix and (
+            subject == reader_subject_prefix or subject.startswith(reader_subject_prefix + ".")
+        ):
+            raise ValueError(
+                f"{path}: subject {subject!r} falls under reader prefix "
+                f"{reader_subject_prefix!r} — would create a write/read loop"
+            )
+
+        rules.append(
+            WriterRule(
+                subject=subject,
+                ga=raw["ga"],
+                dpt=dpt,
+                payload_path=raw["payload_path"],
+                description=raw.get("description"),
+                min_delta=raw.get("min_delta"),
+                min_delta_pct=raw.get("min_delta_pct"),
+                seed_on_start=raw.get("seed_on_start", False),
+            )
+        )
+    return rules
 
 
 def extract_value(payload: Any, path: str) -> Any:

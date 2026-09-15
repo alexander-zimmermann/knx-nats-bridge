@@ -286,3 +286,162 @@ def test_extract_value_missing_key_raises() -> None:
 def test_extract_value_descends_into_scalar_raises() -> None:
     with pytest.raises(KeyError):
         extract_value({"a": 1}, "$.a.b")
+
+
+# --- directory of rule files -------------------------------------------------
+
+
+def _write_dir(tmp_path: Path, files: dict[str, str]) -> Path:
+    d = tmp_path / "writer-rules.d"
+    d.mkdir()
+    for name, body in files.items():
+        (d / name).write_text(body, encoding="utf-8")
+    return d
+
+
+_RULE_A = """
+mappings:
+  - subject: "solaredge-1.powerflow"
+    ga: "15/4/0"
+    dpt: "14.056"
+    payload_path: "$.grid.power"
+"""
+
+_RULE_B = """
+mappings:
+  - subject: "ems-esp.boiler_data"
+    ga: "15/2/1"
+    dpt: "1.001"
+    payload_path: "$.burnstart_active"
+  - subject: "ems-esp.boiler_data"
+    ga: "15/2/2"
+    dpt: "9.001"
+    payload_path: "$.curflowtemp"
+"""
+
+
+def test_directory_loads_union_in_file_order(tmp_path: Path) -> None:
+    # Written out of order on purpose: the loader sorts by file name.
+    d = _write_dir(tmp_path, {"20-ems-esp.yaml": _RULE_B, "10-solaredge.yaml": _RULE_A})
+    table = WriterRules.load(d, reader_subject_prefix="knx")
+    assert len(table) == 3
+    assert [r.ga for r in table] == ["15/4/0", "15/2/1", "15/2/2"]
+    assert table.subjects() == ["solaredge-1.powerflow", "ems-esp.boiler_data"]
+
+
+def test_directory_ignores_non_yaml_files(tmp_path: Path) -> None:
+    d = _write_dir(
+        tmp_path,
+        {"10-solaredge.yaml": _RULE_A, "README.md": "# not a rule file\n", "notes.txt": "x"},
+    )
+    assert len(WriterRules.load(d)) == 1
+
+
+def test_directory_rejects_ga_claimed_by_two_files(tmp_path: Path) -> None:
+    dup = """
+mappings:
+  - subject: "other.subject"
+    ga: "15/4/0"
+    dpt: "14.056"
+    payload_path: "$.power"
+"""
+    d = _write_dir(tmp_path, {"10-solaredge.yaml": _RULE_A, "30-other.yaml": dup})
+    with pytest.raises(ValueError, match=r"15/4/0") as exc_info:
+        WriterRules.load(d)
+    message = str(exc_info.value)
+    assert "10-solaredge.yaml" in message
+    assert "30-other.yaml" in message
+
+
+def test_directory_rejects_ga_claimed_twice_in_one_file(tmp_path: Path) -> None:
+    dup = """
+mappings:
+  - subject: "a.subject"
+    ga: "15/4/0"
+    dpt: "14.056"
+    payload_path: "$.power"
+  - subject: "b.subject"
+    ga: "15/4/0"
+    dpt: "14.056"
+    payload_path: "$.power"
+"""
+    d = _write_dir(tmp_path, {"10-one.yaml": dup})
+    with pytest.raises(ValueError, match=r"15/4/0.*10-one\.yaml"):
+        WriterRules.load(d)
+
+
+def test_single_file_rejects_duplicate_ga(tmp_path: Path) -> None:
+    # One GA, one writer — the check holds for the single-file form too.
+    path = _write(
+        tmp_path,
+        """
+        mappings:
+          - subject: "a.subject"
+            ga: "15/4/0"
+            dpt: "14.056"
+            payload_path: "$.power"
+          - subject: "b.subject"
+            ga: "15/4/0"
+            dpt: "14.056"
+            payload_path: "$.power"
+        """,
+    )
+    with pytest.raises(ValueError, match=r"15/4/0.*writer-rules\.yaml"):
+        WriterRules.load(path)
+
+
+def test_directory_schema_error_names_the_file(tmp_path: Path) -> None:
+    bad = """
+mappings:
+  - subject: "x"
+    ga: "1/2/3"
+    dpt: "14.056"
+    payload_path: "$.power"
+    bogus_key: true
+"""
+    d = _write_dir(tmp_path, {"10-solaredge.yaml": _RULE_A, "20-bad.yaml": bad})
+    with pytest.raises(jsonschema.ValidationError, match=r"20-bad\.yaml"):
+        WriterRules.load(d)
+
+
+def test_directory_dpt_error_names_the_file(tmp_path: Path) -> None:
+    bad = """
+mappings:
+  - subject: "x"
+    ga: "1/2/3"
+    dpt: "999.999"
+    payload_path: "$.power"
+"""
+    d = _write_dir(tmp_path, {"10-solaredge.yaml": _RULE_A, "20-bad.yaml": bad})
+    with pytest.raises(ValueError, match=r"20-bad\.yaml.*unknown DPT"):
+        WriterRules.load(d)
+
+
+def test_directory_loop_subject_names_the_file(tmp_path: Path) -> None:
+    bad = """
+mappings:
+  - subject: "knx.14.3.1"
+    ga: "14/3/1"
+    dpt: "1.001"
+    payload_path: "$.value"
+"""
+    d = _write_dir(tmp_path, {"10-solaredge.yaml": _RULE_A, "20-bad.yaml": bad})
+    with pytest.raises(ValueError, match=r"20-bad\.yaml.*reader prefix"):
+        WriterRules.load(d, reader_subject_prefix="knx")
+
+
+def test_empty_directory_raises_like_missing_file(tmp_path: Path) -> None:
+    d = _write_dir(tmp_path, {})
+    with pytest.raises(FileNotFoundError, match=r"writer-rules\.d"):
+        WriterRules.load(d)
+
+
+def test_directory_without_yaml_raises_like_missing_file(tmp_path: Path) -> None:
+    d = _write_dir(tmp_path, {"README.md": "# nothing here\n"})
+    with pytest.raises(FileNotFoundError, match=r"writer-rules\.d"):
+        WriterRules.load(d)
+
+
+def test_missing_path_raises(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        WriterRules.load(tmp_path / "does-not-exist.yaml")
