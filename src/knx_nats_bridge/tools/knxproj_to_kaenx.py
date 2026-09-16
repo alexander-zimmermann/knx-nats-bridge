@@ -1,36 +1,33 @@
-"""Generate Kaenx-Creator projects for the ETS paper devices.
+"""Generate Kaenx-Creator projects for the generated ETS devices.
 
-The ETS project models bus participants that live in software — the
-KNX-NATS bridge, the Basalte visualisation, Node-Red — as placeholder
-devices whose only job is filter-table membership. This tool builds a
-real product database for each of them instead: one Kaenx-Creator
-project (.ae-manu) per device. Kaenx-Creator (Windows) then exports the
-.knxprod that ETS imports.
+Bus participants without a product database — the KNX-NATS bridge, the
+Basalte visualisation, Node-Red, the Telenot alarm panel — sit in the
+ETS project as placeholder devices whose only job is filter-table
+membership. This tool builds a real product database for each of them
+instead: one Kaenx-Creator project (.ae-manu) per device. Kaenx-Creator
+(Windows) then exports the .knxprod that ETS imports.
 
-Objects are **collectors**: one communication object per main group and
+Objects are **collectors**: one communication object per main group,
 datapoint type — the exact subtype where ETS declares one, the main
-type for the rest — and, on a ``split`` device, per direction. A device
-carries a few dozen objects and every group address of a kind is
-linked to the same object with one multi-select in ETS. A wiring
-worksheet emitted beside each project lists, per object, exactly which
-addresses belong on it.
+type for the rest — and direction. A device carries a few dozen objects
+and every group address of a kind is linked to the same object with one
+multi-select in ETS. A wiring worksheet emitted beside each project
+lists, per object, exactly which addresses belong on it.
 
-Where a device's addresses come from is per device: a pattern or
-individual address collects what the ETS export links to the matching
-device(s), while a ``@file`` source lists the addresses directly, so a
-device whose true footprint is defined by configuration (the bridge:
-writer-rule targets plus consumer-handled addresses; Basalte: the
-Studio export's bindings) is generated from that configuration and ETS
-only supplies each address's name and datapoint type.
+Every address has a direction, in bus terms: ``transmit`` — the device
+sends it and answers reads (Transmit+Read object); ``write`` — the
+device acts on writes to it (Write object); ``both`` (Write+Transmit).
+The Write flag is what the catalog's ``writable`` vote counts, so the
+direction must be exact per address.
 
-Flag modes per device:
-
-- ``split``: addresses listed in ``--write-gas`` (a NATS consumer acts
-  on writes to them) land on Write-flagged objects, the rest on
-  Transmit+Read objects (the bridge sends these and answers reads from
-  its responder cache). Keeps the catalog's ``writable`` vote exact.
-- ``both``: Write+Transmit objects. For devices that both display and
-  send (visualisation) and stay excluded from the write vote anyway.
+Where a device's addresses come from is per device: a ``@file`` source
+is the device's footprint — one ``<address> <direction>`` per line,
+extracted from the configuration that defines the device (the bridge:
+writer-rule targets and consumer-handled addresses; Basalte: the Studio
+export's bindings; the Telenot: its compasX export) — and ETS only
+supplies each address's name and datapoint type. A pattern or
+individual address instead collects what the ETS export links to the
+matching device(s), with the direction the linked objects' flags say.
 
 A template .ae-manu saved by the target Kaenx-Creator installation
 supplies everything version-specific (mask, load procedures, language);
@@ -40,8 +37,8 @@ carry ``TypeNumber`` and a correct ``ObjectSize``.
 
 Example:
     knxproj-to-kaenx --input project.knxproj --template empty.ae-manu \\
-        --device '@bridge-gas.txt=KNX-NATS-Bridge:split' --write-gas consumed.txt \\
-        --device '@basalte-gas.txt=Basalte Core S4:both' --output-dir out/
+        --device '@bridge=KNX-NATS-Bridge' --device '@basalte=Basalte Core S4' \\
+        --output-dir out/
 """
 
 from __future__ import annotations
@@ -303,17 +300,16 @@ _DIRECTIONS = {
 
 @dataclass(frozen=True)
 class DeviceSpec:
-    """One ``--device SOURCE=NAME:MODE`` argument, parsed.
+    """One ``--device SOURCE=NAME`` argument, parsed.
 
     ``source`` is either a pattern selecting ETS device(s) or, prefixed
-    with ``@``, a file listing the group addresses directly — for a
-    device whose true footprint lives in configuration rather than in
-    the ETS project.
+    with ``@``, the footprint file listing the group addresses with
+    their direction — for a device whose true footprint lives in
+    configuration rather than in the ETS project.
     """
 
     source: str
     name: str
-    mode: str  # "split" | "both"
     app_number: int
 
     @property
@@ -347,6 +343,9 @@ class Collector:
         return f"hg{self.main_group}-dpt{self.dpt_label}-{self.direction}"
 
 
+# Object order within one main group and type: sending, two-way, receiving.
+_DIRECTION_ORDER = ("transmit", "both", "write")
+
 _KEY_RE = re.compile(r"^hg(\d+)-dpt(\d+)(?:\.(\d+|xxx))?-(transmit|write|both)$")
 
 
@@ -377,8 +376,7 @@ class DeviceReport:
     transmit: int = 0  # addresses on Transmit-flagged objects
     collectors: list[Collector] = field(default_factory=list)
     skipped: list[tuple[str, str]] = field(default_factory=list)  # (ga, reason)
-    unmatched_write_gas: list[str] = field(default_factory=list)
-    missing: list[str] = field(default_factory=list)  # listed in a @file, absent from ETS
+    missing: list[str] = field(default_factory=list)  # in the footprint, absent from ETS
     new_objects: list[Collector] = field(default_factory=list)  # not on the installed device
     renumbered: list[Collector] = field(default_factory=list)  # installed under another number
     # (installed number, text, links) — installed objects this version no longer has
@@ -386,29 +384,44 @@ class DeviceReport:
 
 
 def parse_device_spec(raw: str, app_number: int) -> DeviceSpec:
-    """``SOURCE=NAME:MODE`` -> DeviceSpec. NAME may contain colons-free text."""
-    source, sep, rest = raw.partition("=")
-    name, sep2, mode = rest.rpartition(":")
-    if not sep or not sep2 or not source.strip() or not name.strip():
-        raise SystemExit(f"invalid --device {raw!r}: expected SOURCE=NAME:MODE")
-    if mode not in ("split", "both"):
-        raise SystemExit(f"invalid --device {raw!r}: mode must be 'split' or 'both'")
-    return DeviceSpec(source=source.strip(), name=name.strip(), mode=mode, app_number=app_number)
+    """``SOURCE=NAME`` -> DeviceSpec."""
+    source, sep, name = raw.partition("=")
+    if not sep or not source.strip() or not name.strip():
+        raise SystemExit(f"invalid --device {raw!r}: expected SOURCE=NAME")
+    return DeviceSpec(source=source.strip(), name=name.strip(), app_number=app_number)
 
 
-def read_ga_list(text: str, origin: str) -> frozenset[str]:
-    """One address per line, as ``M/C/S`` or NATS subject ``<prefix>.M.C.S``."""
-    gas: set[str] = set()
-    for raw in text.splitlines():
+def read_footprint(text: str, origin: str) -> dict[str, str]:
+    """{address -> direction} from a footprint: one ``<address>
+    <direction>`` per line, the address as ``M/C/S`` or NATS subject
+    ``<prefix>.M.C.S``, the direction ``transmit``, ``write`` or
+    ``both``; ``#`` starts a comment.
+
+    Footprints are generated, never written by hand, so a line without
+    a direction is an error named by file and line, not a default.
+    """
+    directions: dict[str, str] = {}
+    for number, raw in enumerate(text.splitlines(), start=1):
         line = raw.split("#", 1)[0].strip()
         if not line:
             continue
-        if "/" not in line:
-            line = "/".join(line.split(".")[-3:])
-        if not _GA_RE.match(line):
-            raise SystemExit(f"{origin}: {raw.strip()!r} is not a group address")
-        gas.add(line)
-    return frozenset(gas)
+        where = f"{origin}:{number}"
+        fields = line.split()
+        if len(fields) != 2:
+            raise SystemExit(f"{where}: expected '<address> <direction>', got {line!r}")
+        ga, direction = fields
+        if "/" not in ga:
+            ga = "/".join(ga.split(".")[-3:])
+        if not _GA_RE.match(ga):
+            raise SystemExit(f"{where}: {fields[0]!r} is not a group address")
+        if direction not in _DIRECTIONS:
+            raise SystemExit(
+                f"{where}: direction must be transmit, write or both, got {direction!r}"
+            )
+        if directions.get(ga, direction) != direction:
+            raise SystemExit(f"{where}: {ga} listed again as {direction!r}, was {directions[ga]!r}")
+        directions[ga] = direction
+    return directions
 
 
 def _ga_sort_key(ga: str) -> tuple[int, int, int]:
@@ -416,8 +429,8 @@ def _ga_sort_key(ga: str) -> tuple[int, int, int]:
     return (int(main), int(middle), int(sub))
 
 
-def device_group_addresses(project_data: Mapping[str, Any], pattern: str) -> dict[str, Any]:
-    """Group addresses carried by devices matching ``pattern``.
+def device_group_addresses(project_data: Mapping[str, Any], pattern: str) -> dict[str, str | None]:
+    """{group address -> direction} carried by devices matching ``pattern``.
 
     Matching mirrors the catalog extractor's ``--ignore-write-from``: a
     case-insensitive substring test against device name, manufacturer
@@ -425,6 +438,9 @@ def device_group_addresses(project_data: Mapping[str, Any], pattern: str) -> dic
     single named device. A pattern shaped like an individual address
     (``1.1.240``) selects exactly that device instead — the only handle
     left when several placeholders share one product and no name.
+
+    The direction is what the flags of the linked objects say — Write,
+    Transmit, or both; ``None`` when they carry neither.
     """
     devices = project_data.get("devices", {}) or {}
     comm_objects = project_data.get("communication_objects", {}) or {}
@@ -443,20 +459,37 @@ def device_group_addresses(project_data: Mapping[str, Any], pattern: str) -> dic
             ).lower()
         }
 
-    matching_co_ids = {
-        str(co_id)
+    matching = {
+        str(co_id): co
         for co_id, co in comm_objects.items()
         if isinstance(co, dict) and str(co.get("device_address")) in matching_addresses
     }
 
-    result: dict[str, Any] = {}
+    result: dict[str, str | None] = {}
     for ga, info in (project_data.get("group_addresses", {}) or {}).items():
         if not isinstance(info, dict):
             continue
-        co_ids = info.get("communication_object_ids") or []
-        if any(str(co_id) in matching_co_ids for co_id in co_ids):
-            result[str(ga)] = info
+        linked = [
+            matching[str(co_id)]
+            for co_id in info.get("communication_object_ids") or []
+            if str(co_id) in matching
+        ]
+        if linked:
+            result[str(ga)] = _direction_of(linked)
     return result
+
+
+def _direction_of(linked: Iterable[Mapping[str, Any]]) -> str | None:
+    """Direction the Write/Transmit flags of these objects add up to; ``None`` for neither."""
+    flags = {
+        flag
+        for co in linked
+        for flag in ("write", "transmit")
+        if isinstance(co.get("flags"), dict) and co["flags"].get(flag)
+    }
+    if flags == {"write", "transmit"}:
+        return "both"
+    return next(iter(flags), None)
 
 
 def _main_group_names(project_data: Mapping[str, Any]) -> dict[int, str]:
@@ -668,7 +701,6 @@ def _numbered_items(items: list[Any]) -> list[Any]:
 def build_collectors(
     spec: DeviceSpec,
     project_data: Mapping[str, Any],
-    write_gas: frozenset[str],
     report: DeviceReport,
     installed: Mapping[int, str] | None = None,
 ) -> list[Collector]:
@@ -686,17 +718,15 @@ def build_collectors(
     -> key, from the device in the ETS export) tells which objects are
     new, which moved, and which the new version no longer has.
     """
+    directions: Mapping[str, str | None]
     if spec.source.startswith("@"):
         path = Path(spec.source[1:])
-        listed = read_ga_list(path.read_text(encoding="utf-8"), origin=str(path))
-        if not listed:
+        directions = read_footprint(path.read_text(encoding="utf-8"), origin=str(path))
+        if not directions:
             raise SystemExit(f"--device {spec.name}: {path} lists no group addresses")
-        all_gas = project_data.get("group_addresses", {}) or {}
-        gas = {ga: all_gas[ga] for ga in listed if isinstance(all_gas.get(ga), dict)}
-        report.missing = sorted(listed - set(gas), key=_ga_sort_key)
     else:
-        gas = device_group_addresses(project_data, spec.source)
-        if not gas:
+        directions = device_group_addresses(project_data, spec.source)
+        if not directions:
             available = sorted(
                 f"{addr} {device.get('name') or device.get('hardware_name') or ''}".strip()
                 for addr, device in (project_data.get("devices", {}) or {}).items()
@@ -706,6 +736,9 @@ def build_collectors(
                 f"--device {spec.source!r} matches no device carrying group addresses; "
                 "devices in the project:\n  " + "\n  ".join(available)
             )
+    all_gas = project_data.get("group_addresses", {}) or {}
+    gas = {ga: all_gas[ga] for ga in directions if isinstance(all_gas.get(ga), dict)}
+    report.missing = sorted(set(directions) - set(gas), key=_ga_sort_key)
 
     hg_names = _main_group_names(project_data)
     collectors: dict[tuple[int, int, int | None, str], Collector] = {}
@@ -719,13 +752,11 @@ def build_collectors(
         if int(main) not in _DPT_SIZE_BITS:
             report.skipped.append((ga, f"DPT {main} unknown to Kaenx-Creator"))
             continue
+        direction = directions[ga]
+        if direction is None:
+            report.skipped.append((ga, "neither Write nor Transmit on the source device"))
+            continue
 
-        if spec.mode == "both":
-            direction = "both"
-        elif ga in write_gas:
-            direction = "write"
-        else:
-            direction = "transmit"
         main_group = int(ga.split("/")[0])
         raw_sub = dpt.get("sub") if isinstance(dpt, dict) else None
         sub = int(raw_sub) if raw_sub is not None else None
@@ -742,18 +773,16 @@ def build_collectors(
         report.links += 1
         report.write += direction in ("write", "both")
         report.transmit += direction in ("transmit", "both")
-    if spec.mode == "split":
-        report.unmatched_write_gas = sorted(write_gas - set(gas), key=_ga_sort_key)
 
     # Positional order: main group, datapoint type (main-type collector
-    # before its subtypes), sending before receiving.
+    # before its subtypes), sending before two-way before receiving.
     ordered = sorted(
         collectors.values(),
         key=lambda c: (
             c.main_group,
             c.dpt_main,
             -1 if c.dpt_sub is None else c.dpt_sub,
-            c.direction == "write",
+            _DIRECTION_ORDER.index(c.direction),
         ),
     )
     for number, collector in enumerate(ordered, start=1):
@@ -840,7 +869,6 @@ def build_device_model(
     template: Mapping[str, Any],
     spec: DeviceSpec,
     project_data: Mapping[str, Any],
-    write_gas: frozenset[str],
     catalog_section: str | None = None,
     installed: Mapping[int, str] | None = None,
     published: int = 0,
@@ -855,7 +883,7 @@ def build_device_model(
     language = dict(application["Languages"][0])
     report = DeviceReport()
 
-    ordered = build_collectors(spec, project_data, write_gas, report, installed)
+    ordered = build_collectors(spec, project_data, report, installed)
     com_objects = [_com_object(collector.number, collector, language) for collector in ordered]
 
     refs = [_com_object_ref(co, language) for co in com_objects]
@@ -983,29 +1011,19 @@ def main(argv: list[str] | None = None) -> int:
         "--device",
         action="append",
         required=True,
-        metavar="SOURCE=NAME:MODE",
+        metavar="SOURCE=NAME",
         help=(
-            "Device to generate: SOURCE selects the source device(s) by "
-            "case-insensitive substring against name, manufacturer and hardware "
-            "name, by individual address (1.1.240), or — prefixed with @ — names "
-            "a file listing the group addresses directly (one address or NATS "
-            "subject per line), for a device whose footprint is defined by "
-            "configuration rather than by the ETS project; NAME names the "
-            "generated product; MODE is 'split' (Write-flagged collector objects "
-            "for --write-gas addresses, Transmit+Read collectors otherwise) or "
-            "'both' (Write+Transmit collectors). Repeatable; the application "
-            "number is 100 plus the argument's position, so keep the order "
-            "stable."
-        ),
-    )
-    parser.add_argument(
-        "--write-gas",
-        type=Path,
-        default=None,
-        help=(
-            "File with one group address (or NATS subject) per line: the "
-            "addresses whose writes a NATS consumer acts on. Required when a "
-            "device uses mode 'split'."
+            "Device to generate: SOURCE, prefixed with @, names the footprint "
+            "file — one '<address> <direction>' per line, the address as M/C/S "
+            "or NATS subject, the direction transmit (Transmit+Read collector), "
+            "write (Write collector) or both — for a device whose footprint is "
+            "defined by configuration rather than by the ETS project; without "
+            "@ it selects the source device(s) by case-insensitive substring "
+            "against name, manufacturer and hardware name, or by individual "
+            "address (1.1.240), the direction then being what the linked "
+            "objects' flags say. NAME names the generated product. Repeatable; "
+            "the application number is 100 plus the argument's position, so "
+            "keep the order stable."
         ),
     )
     parser.add_argument(
@@ -1047,12 +1065,6 @@ def main(argv: list[str] | None = None) -> int:
     if len({s.slug for s in specs}) != len(specs):
         raise SystemExit("--device names collide after slugging; rename one")
 
-    write_gas = frozenset[str]()
-    if args.write_gas is not None:
-        write_gas = read_ga_list(args.write_gas.read_text(encoding="utf-8"), origin="--write-gas")
-    elif any(s.mode == "split" for s in specs):
-        raise SystemExit("--write-gas is required when a device uses mode 'split'")
-
     template = json.loads(args.template.read_text(encoding="utf-8"))
     logger.info("parsing %s", args.input)
     project_data = _load_project(args.input, args.password)
@@ -1069,7 +1081,6 @@ def main(argv: list[str] | None = None) -> int:
             template,
             spec,
             project_data,
-            write_gas,
             catalog_section=args.catalog_section,
             installed=installed,
             published=published,
@@ -1145,16 +1156,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         for ga in report.missing:
             logger.warning(
-                "%s: listed address %s does not exist in the ETS project — the "
+                "%s: footprint address %s does not exist in the ETS project — the "
                 "configuration points at nothing",
-                spec.name,
-                ga,
-            )
-            failed = True
-        for ga in report.unmatched_write_gas:
-            logger.warning(
-                "%s: consumed address %s is not on the source device — a NATS "
-                "consumer acts on it but ETS does not deliver it",
                 spec.name,
                 ga,
             )

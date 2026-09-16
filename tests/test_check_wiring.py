@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from knx_nats_bridge.tools.check_wiring import check_device, todo_worksheet
 from knx_nats_bridge.tools.knxproj_to_kaenx import parse_device_spec
@@ -21,19 +24,19 @@ def _project_data() -> dict[str, Any]:
 
     return {
         "group_addresses": {
-            # Writer target, correctly on a Transmit collector.
+            # Sent by the bridge, correctly on a Transmit collector.
             "0/0/251": {
                 "name": "Zentral.Fault",
                 "dpt": {"main": 1, "sub": 1},
                 "communication_object_ids": ["co-t"],
             },
-            # Consumed address, correctly on a Write collector.
+            # Write-direction address, correctly on a Write collector.
             "4/2/60": {
                 "name": "Bordbar.OnOff",
                 "dpt": {"main": 1, "sub": 1},
                 "communication_object_ids": ["co-w"],
             },
-            # Consumed address linked to a Transmit collector: misflagged.
+            # Write-direction address linked to a Transmit collector: misflagged.
             "15/6/25": {
                 "name": "Wallbox.ModusPV",
                 "dpt": {"main": 1, "sub": 1},
@@ -67,18 +70,22 @@ def _project_data() -> dict[str, Any]:
     }
 
 
-def _check(tmp_path: Path, footprint: list[str], write_gas: set[str]) -> Any:
-    ga_file = tmp_path / "footprint.txt"
-    ga_file.write_text("\n".join(footprint) + "\n", encoding="utf-8")
-    spec = parse_device_spec(f"@{ga_file}=KNX-NATS-Bridge:split", 100)
-    return spec, check_device(_project_data(), spec, frozenset(write_gas))
+Footprint = Callable[..., Path]
 
 
-def test_all_finding_classes(tmp_path: Path) -> None:
+def _check(footprint: Footprint, *lines: str) -> Any:
+    spec = parse_device_spec(f"@{footprint(*lines)}=KNX-NATS-Bridge", 100)
+    return spec, check_device(_project_data(), spec)
+
+
+def test_all_finding_classes(footprint: Footprint) -> None:
     spec, report = _check(
-        tmp_path,
-        ["0/0/251", "4/2/60", "15/6/25", "2/0/1", "7/7/7"],
-        {"4/2/60", "15/6/25"},
+        footprint,
+        "0/0/251 transmit",
+        "4/2/60 write",
+        "knx.15.6.25 write",
+        "2/0/1 transmit",
+        "7/7/7 transmit",
     )
     # 2/0/1 exists in ETS but is linked to another device only: it is
     # the one open link, on its collector with the generated number.
@@ -86,8 +93,8 @@ def test_all_finding_classes(tmp_path: Path) -> None:
         (2, [("2/0/1", "Schalten.Zentral")])
     ]
     assert report.open_links == 1
-    # 15/6/25 is consumed but sits on the sending collector: the Write
-    # flag is missing and the Transmit flag is one it must not carry.
+    # 15/6/25 has direction write but sits on the sending collector: the
+    # Write flag is missing and the Transmit flag is one it must not carry.
     assert report.misflagged == [("15/6/25", "write")]
     assert report.cross_linked == [("15/6/25", "transmit")]
     assert report.misplaced == [("15/6/25", 4, [1])]
@@ -104,7 +111,7 @@ def test_all_finding_classes(tmp_path: Path) -> None:
     assert "- `7/7/7`" in sheet
 
 
-def test_cross_link_beside_the_correct_one_is_caught(tmp_path: Path) -> None:
+def test_cross_link_beside_the_correct_one_is_caught(footprint: Footprint) -> None:
     """A status address dropped on the receiving collector as well.
 
     The wanted flag is present, so the old check passed it — while the
@@ -112,10 +119,8 @@ def test_cross_link_beside_the_correct_one_is_caught(tmp_path: Path) -> None:
     """
     data = _project_data()
     data["group_addresses"]["0/0/251"]["communication_object_ids"] = ["co-t", "co-w"]
-    ga_file = tmp_path / "footprint.txt"
-    ga_file.write_text("0/0/251\n", encoding="utf-8")
-    spec = parse_device_spec(f"@{ga_file}=KNX-NATS-Bridge:split", 100)
-    report = check_device(data, spec, frozenset())
+    spec = parse_device_spec(f"@{footprint('0/0/251 transmit')}=KNX-NATS-Bridge", 100)
+    report = check_device(data, spec)
 
     assert report.todo == []
     assert report.misflagged == []
@@ -123,21 +128,43 @@ def test_cross_link_beside_the_correct_one_is_caught(tmp_path: Path) -> None:
     assert not report.clean
 
 
-def test_both_mode_device_cannot_cross_link(tmp_path: Path) -> None:
+def test_both_direction_cannot_cross_link(footprint: Footprint) -> None:
     data = _project_data()
     data["group_addresses"]["0/0/251"]["communication_object_ids"] = ["co-t", "co-w"]
-    ga_file = tmp_path / "footprint.txt"
-    ga_file.write_text("0/0/251\n", encoding="utf-8")
-    spec = parse_device_spec(f"@{ga_file}=KNX-NATS-Bridge:both", 100)
-    report = check_device(data, spec, frozenset())
+    spec = parse_device_spec(f"@{footprint('0/0/251 both')}=KNX-NATS-Bridge", 100)
+    report = check_device(data, spec)
 
-    # Its collectors carry both directions, so neither flag is forbidden.
+    # Its collector carries both directions, so neither flag is forbidden.
     assert report.cross_linked == []
     assert report.misflagged == []
 
 
-def test_findings_only_what_is_wrong(tmp_path: Path) -> None:
-    _, report = _check(tmp_path, ["0/0/251", "4/2/60"], {"4/2/60"})
+def test_both_direction_needs_both_flags(footprint: Footprint) -> None:
+    # A two-way address on the sending collector alone lacks Write.
+    _, report = _check(footprint, "0/0/251 both")
+    assert report.misflagged == [("0/0/251", "write")]
+    assert report.cross_linked == []
+
+
+def test_direction_per_line_not_per_device(footprint: Footprint) -> None:
+    # Two devices with the same address in opposite directions: each is
+    # judged by its own line, nothing global decides.
+    _, report_t = _check(footprint, "0/0/251 transmit")
+    _, report_w = _check(footprint, "0/0/251 write")
+    assert report_t.misflagged == [] and report_t.clean is False  # 9/9/9 etc. are extra
+    assert report_w.misflagged == [("0/0/251", "write")]
+    assert report_w.cross_linked == [("0/0/251", "transmit")]
+
+
+def test_footprint_without_direction_fails_naming_the_line(footprint: Footprint) -> None:
+    ga_file = footprint("0/0/251 transmit", "4/2/60")
+    spec = parse_device_spec(f"@{ga_file}=KNX-NATS-Bridge", 100)
+    with pytest.raises(SystemExit, match=rf"{ga_file}:2:"):
+        check_device(_project_data(), spec)
+
+
+def test_findings_only_what_is_wrong(footprint: Footprint) -> None:
+    _, report = _check(footprint, "0/0/251 transmit", "4/2/60 write")
     assert report.todo == []
     assert report.misflagged == []
     assert report.missing_from_ets == []
@@ -146,16 +173,14 @@ def test_findings_only_what_is_wrong(tmp_path: Path) -> None:
     assert not report.clean
 
 
-def test_unimported_device_is_reported(tmp_path: Path) -> None:
-    ga_file = tmp_path / "footprint.txt"
-    ga_file.write_text("1/1/1\n", encoding="utf-8")
-    spec = parse_device_spec(f"@{ga_file}=Ghost:both", 100)
-    report = check_device(_project_data(), spec, frozenset())
+def test_unimported_device_is_reported(footprint: Footprint) -> None:
+    spec = parse_device_spec(f"@{footprint('1/1/1 both')}=Ghost", 100)
+    report = check_device(_project_data(), spec)
     assert report.device_found is False
     assert not report.clean
 
 
-def test_misplaced_link_is_reported(tmp_path: Path) -> None:
+def test_misplaced_link_is_reported(footprint: Footprint) -> None:
     """After a type change the address belongs on a new collector, but its
     link still sits on the old object: flags match, the number does not."""
     data = _project_data()
@@ -166,10 +191,9 @@ def test_misplaced_link_is_reported(tmp_path: Path) -> None:
         "dpt": {"main": 1, "sub": 17},
         "communication_object_ids": ["co-t"],
     }
-    ga_file = tmp_path / "footprint.txt"
-    ga_file.write_text("0/0/251\n0/0/253\n", encoding="utf-8")
-    spec = parse_device_spec(f"@{ga_file}=KNX-NATS-Bridge:split", 100)
-    report = check_device(data, spec, frozenset())
+    ga_file = footprint("0/0/251 transmit", "0/0/253 transmit")
+    spec = parse_device_spec(f"@{ga_file}=KNX-NATS-Bridge", 100)
+    report = check_device(data, spec)
 
     assert report.misflagged == [] and report.cross_linked == []
     assert report.misplaced == [("0/0/253", 2, [1])]
@@ -178,7 +202,7 @@ def test_misplaced_link_is_reported(tmp_path: Path) -> None:
     assert "- `0/0/253` — gehört auf Objekt 2, hängt an 1" in sheet
 
 
-def test_older_installed_version_is_checked_by_object_name(tmp_path: Path) -> None:
+def test_older_installed_version_is_checked_by_object_name(footprint: Footprint) -> None:
     """The device in the project is the previous version: its numbers
     differ from the generated ones, and one object exists only in the
     new version. Findings carry the numbers ETS shows today."""
@@ -188,13 +212,12 @@ def test_older_installed_version_is_checked_by_object_name(tmp_path: Path) -> No
         "dpt": {"main": 1, "sub": 17},
         "communication_object_ids": ["co-t"],
     }
-    ga_file = tmp_path / "footprint.txt"
-    ga_file.write_text("0/0/251\n0/0/253\n4/2/60\n", encoding="utf-8")
-    spec = parse_device_spec(f"@{ga_file}=KNX-NATS-Bridge:split", 100)
+    ga_file = footprint("0/0/251 transmit", "0/0/253 transmit", "4/2/60 write")
+    spec = parse_device_spec(f"@{ga_file}=KNX-NATS-Bridge", 100)
     # Generated: 1 = hg0 1.001 sendet, 2 = hg0 1.017 sendet, 3 = hg4 1.001
     # empfängt. Installed without the 1.017 object, under other numbers.
     installed = {1: "hg0-dpt1.001-transmit", 3: "hg4-dpt1.001-write"}
-    report = check_device(data, spec, frozenset({"4/2/60"}), installed)
+    report = check_device(data, spec, installed)
 
     # 0/0/251 on installed object 1, 4/2/60 on installed object 3: fine.
     # 0/0/253 hangs on object 1 but belongs on the new version's object 2.

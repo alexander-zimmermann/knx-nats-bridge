@@ -1,11 +1,12 @@
-"""Hold the ETS export against the software-device footprints.
+"""Hold the ETS export against the generated devices' footprints.
 
-The generated ETS devices (bridge, Basalte, Node-Red) are views of
-configuration that lives elsewhere — writer rules, consumer manifests,
-the Basalte Studio export, the Node-Red flows. This check makes the
-comparison automatic instead of visual: per device, every footprint
-address must be linked to the device in ETS, nothing else may be, and
-the linked object's flags must match the direction.
+The generated ETS devices (bridge, Basalte, Node-Red, Telenot) are
+views of configuration that lives elsewhere — writer rules, consumer
+manifests, the Basalte Studio export, the Node-Red flows, the compasX
+export. This check makes the comparison automatic instead of visual:
+per device, every footprint address must be linked to the device in
+ETS, nothing else may be, and the linked object's flags must match the
+direction the footprint gives the address.
 
 Findings, per device:
 
@@ -15,8 +16,8 @@ Findings, per device:
 - **extra** — linked to the device in ETS, but no configuration claims
   it. Left over from an earlier footprint, or wired by mistake.
 - **misflagged** — linked, but to an object without the flag its
-  direction needs: a consumed address (``--write-gas``) needs a
-  Write-flagged object, everything else a Transmit-flagged one.
+  direction needs: a ``write`` address needs a Write-flagged object, a
+  ``transmit`` address a Transmit-flagged one, ``both`` needs both.
 - **misplaced** — linked to the device, but not to the object the
   configuration puts it on: a type change moved the address to a new
   collector and the link still sits on the old one. Flags may still
@@ -25,7 +26,7 @@ Findings, per device:
   well. The wanted flag being present is not enough: a status address
   that also hangs on the receiving collector makes the catalog call it
   writable, which is the very claim this model exists to keep honest.
-  Devices whose collectors carry both directions cannot hit this.
+  An address of direction ``both`` cannot hit this.
 
 Any finding fails the run. A footprint device that does not exist in
 the project yet (matched by order number, which the generator sets to
@@ -41,9 +42,8 @@ device in the project is still an older version whose numbering
 differs; an object that version does not have yet is marked as such.
 
 Example:
-    knxproj-check-wiring --input project.knxproj --write-gas consumed.txt \\
-        --device '@bridge-gas.txt=KNX-NATS-Bridge:split' \\
-        --device '@basalte-gas.txt=Basalte Core S4:both' --todo-dir ~/Downloads
+    knxproj-check-wiring --input project.knxproj --device '@bridge=KNX-NATS-Bridge' \\
+        --device '@basalte=Basalte Core S4' --todo-dir ~/Downloads
 """
 
 from __future__ import annotations
@@ -65,7 +65,6 @@ from knx_nats_bridge.tools.knxproj_to_kaenx import (
     build_collectors,
     installed_objects,
     parse_device_spec,
-    read_ga_list,
 )
 from knx_nats_bridge.tools.knxproj_to_yaml import _load_project, add_password_argument
 
@@ -156,7 +155,6 @@ def _has_flag(linked: list[Any], flag: str) -> bool:
 def check_device(
     project_data: Mapping[str, Any],
     spec: DeviceSpec,
-    write_gas: frozenset[str],
     installed: Mapping[int, str] | None = None,
 ) -> CheckReport:
     report = CheckReport()
@@ -166,7 +164,7 @@ def check_device(
         return report
 
     build = DeviceReport()
-    collectors = build_collectors(spec, project_data, write_gas, build, installed)
+    collectors = build_collectors(spec, project_data, build, installed)
     report.objects = build.objects
     report.links_expected = build.links
     report.missing_from_ets = build.missing
@@ -273,7 +271,7 @@ def _log_capped(device: str, label: str, items: list[str], todo_hint: str | None
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Hold an ETS export against the software-device footprints"
+        description="Hold an ETS export against the generated devices' footprints"
     )
     parser.add_argument("--input", "-i", required=True, type=Path, help="Path to .knxproj file")
     add_password_argument(parser)
@@ -281,22 +279,13 @@ def main(argv: list[str] | None = None) -> int:
         "--device",
         action="append",
         required=True,
-        metavar="@FILE=NAME:MODE",
+        metavar="@FILE=NAME",
         help=(
             "Device to check, exactly as given to knxproj-to-kaenx: @FILE is "
-            "the footprint (one group address or NATS subject per line), NAME "
-            "the generated product name (matched in ETS via its order number), "
-            "MODE 'split' or 'both'. Repeatable."
-        ),
-    )
-    parser.add_argument(
-        "--write-gas",
-        type=Path,
-        default=None,
-        help=(
-            "File with the consumed addresses (one per line): these must be "
-            "linked to Write-flagged objects, all other footprint addresses "
-            "to Transmit-flagged ones."
+            "the footprint (one '<address> <direction>' per line, the address "
+            "as M/C/S or NATS subject, the direction transmit, write or both), "
+            "NAME the generated product name (matched in ETS via its order "
+            "number). Repeatable."
         ),
     )
     parser.add_argument(
@@ -321,9 +310,6 @@ def main(argv: list[str] | None = None) -> int:
     for spec in specs:
         if not spec.source.startswith("@"):
             raise SystemExit(f"--device {spec.name}: the check needs a @file footprint source")
-    write_gas = frozenset[str]()
-    if args.write_gas is not None:
-        write_gas = read_ga_list(args.write_gas.read_text(encoding="utf-8"), origin="--write-gas")
 
     logger.info("parsing %s", args.input)
     project_data = _load_project(args.input, args.password)
@@ -333,7 +319,7 @@ def main(argv: list[str] | None = None) -> int:
     clean = True
     for spec in specs:
         installed = installed_objects(args.input, project_data, spec.slug)
-        report = check_device(project_data, spec, write_gas, installed)
+        report = check_device(project_data, spec, installed)
         if not report.device_found:
             logger.error(
                 "%s: no device with order number %s in the project — import it "
