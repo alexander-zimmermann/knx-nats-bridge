@@ -11,6 +11,6 @@ concurrency:
 
 jobs:
   test:
-    uses: alexander-zimmermann/lares/.github/workflows/sidecar-python-ci.yaml@4b4dc82f9939f4042b377fb366827b1391571b73 # main
+    uses: alexander-zimmermann/lares/.github/workflows/sidecar-python-ci.yaml@74eccccc06457d67800a16121ddd28980cfa30f8 # main
     with:
       uv-extras: "dev tools import"
