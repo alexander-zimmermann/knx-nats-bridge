@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -10,7 +12,7 @@ from knx_nats_bridge.tools.knxproj_to_kaenx import (
     build_device_model,
     device_group_addresses,
     parse_device_spec,
-    read_ga_list,
+    read_footprint,
     wiring_worksheet,
 )
 
@@ -70,6 +72,10 @@ def _template() -> dict[str, Any]:
     }
 
 
+def _co(device: str, write: bool = False, transmit: bool = False) -> dict[str, Any]:
+    return {"device_address": device, "flags": {"write": write, "transmit": transmit}}
+
+
 def _project_data() -> dict[str, Any]:
     """Hand-built project_data that mirrors xknxproject's parse() shape."""
     return {
@@ -110,14 +116,14 @@ def _project_data() -> dict[str, Any]:
             "4": {"name": "Bordbar", "group_ranges": {}},
         },
         "communication_objects": {
-            "co-sensor": {"device_address": "1.1.2"},
-            "co-actuator": {"device_address": "1.1.1"},
-            "co-bridge-1": {"device_address": "1.1.9"},
-            "co-bridge-2": {"device_address": "1.1.9"},
-            "co-bridge-3": {"device_address": "1.1.9"},
-            "co-bridge-4": {"device_address": "1.1.9"},
-            "co-bridge-5": {"device_address": "1.1.9"},
-            "co-basalte-1": {"device_address": "1.1.10"},
+            "co-sensor": _co("1.1.2", transmit=True),
+            "co-actuator": _co("1.1.1", write=True),
+            "co-bridge-1": _co("1.1.9", transmit=True),
+            "co-bridge-2": _co("1.1.9", write=True),
+            "co-bridge-3": _co("1.1.9", transmit=True),
+            "co-bridge-4": _co("1.1.9", transmit=True),
+            "co-bridge-5": _co("1.1.9", transmit=True),
+            "co-basalte-1": _co("1.1.10", write=True, transmit=True),
         },
         "devices": {
             "1.1.1": {"manufacturer_name": "ACME", "hardware_name": "Switch Actuator"},
@@ -137,30 +143,58 @@ def _project_data() -> dict[str, Any]:
 
 
 def test_parse_device_spec() -> None:
-    spec = parse_device_spec("Bridge placeholder=KNX-NATS-Bridge:split", 100)
+    spec = parse_device_spec("Bridge placeholder=KNX-NATS-Bridge", 100)
     assert spec.source == "Bridge placeholder"
     assert spec.name == "KNX-NATS-Bridge"
-    assert spec.mode == "split"
     assert spec.app_number == 100
     assert spec.slug == "KNX-NATS-BRIDGE"
 
-    assert parse_device_spec("b=Basalte Core S4:both", 101).slug == "BASALTE-CORE-S4"
+    assert parse_device_spec("b=Basalte Core S4", 101).slug == "BASALTE-CORE-S4"
 
 
-@pytest.mark.parametrize("raw", ["no-equals:split", "p=:split", "p=name", "p=name:neither"])
+@pytest.mark.parametrize("raw", ["no-equals", "p=", "=name", " = "])
 def test_parse_device_spec_rejects(raw: str) -> None:
     with pytest.raises(SystemExit):
         parse_device_spec(raw, 100)
 
 
-def test_read_ga_list_accepts_addresses_and_subjects() -> None:
-    text = "4/2/60\nknx.15.6.25  # comment\n\n# full-line comment\n"
-    assert read_ga_list(text, origin="test") == frozenset({"4/2/60", "15/6/25"})
+def test_read_footprint_accepts_addresses_and_subjects() -> None:
+    text = (
+        "4/2/60 write\n"
+        "knx.15.6.25 write  # comment\n"
+        "\n"
+        "# full-line comment\n"
+        "0/0/251   transmit\n"
+        "knx.0.1.40 both\n"
+    )
+    assert read_footprint(text, origin="test") == {
+        "4/2/60": "write",
+        "15/6/25": "write",
+        "0/0/251": "transmit",
+        "0/1/40": "both",
+    }
 
 
-def test_read_ga_list_rejects_garbage() -> None:
-    with pytest.raises(SystemExit, match="test"):
-        read_ga_list("not-an-address\n", origin="test")
+def test_read_footprint_rejects_garbage() -> None:
+    with pytest.raises(SystemExit, match=r"test:1: 'not-an-address'"):
+        read_footprint("not-an-address transmit\n", origin="test")
+
+
+def test_read_footprint_requires_a_direction() -> None:
+    # Footprints are generated, so a bare address is a generator bug,
+    # named by file and line — never silently defaulted.
+    with pytest.raises(SystemExit, match=r"footprint\.txt:3:"):
+        read_footprint("4/2/60 write\n\n0/0/251\n", origin="footprint.txt")
+
+
+def test_read_footprint_rejects_unknown_direction() -> None:
+    with pytest.raises(SystemExit, match=r"test:1: .*'sideways'"):
+        read_footprint("4/2/60 sideways\n", origin="test")
+
+
+def test_read_footprint_rejects_conflicting_directions() -> None:
+    with pytest.raises(SystemExit, match=r"test:2: .*4/2/60"):
+        read_footprint("4/2/60 write\nknx.4.2.60 transmit\n", origin="test")
 
 
 def test_device_group_addresses_matches_by_substring() -> None:
@@ -177,16 +211,17 @@ def test_device_group_addresses_matches_by_individual_address() -> None:
     assert set(gas) == {"0/1/40"}
 
 
-def _build(mode: str = "split", write_gas: frozenset[str] = frozenset({"4/2/60"})) -> Any:
-    spec = parse_device_spec(f"bridge placeholder=KNX-NATS-Bridge:{mode}", 100)
-    return build_device_model(_template(), spec, _project_data(), write_gas)
+def _build(project_data: dict[str, Any] | None = None) -> Any:
+    spec = parse_device_spec("bridge placeholder=KNX-NATS-Bridge", 100)
+    return build_device_model(_template(), spec, project_data or _project_data())
 
 
-def test_split_mode_collectors() -> None:
+def test_pattern_source_collectors_take_the_direction_from_the_flags() -> None:
     model, report = _build()
     objects = model["Application"]["ComObjects"]
 
-    # One collector per (main group, datapoint type, direction): 0/3/2's
+    # One collector per (main group, datapoint type, direction), the
+    # direction being what the linked objects' flags say: 0/3/2's
     # subtype is unknown to Kaenx-Creator, so it joins the 9.xxx
     # main-type collector, which sorts before the 9.001 one. 0/3/0 and
     # 0/3/1 are skipped (no DPT / DPT unknown to Kaenx-Creator).
@@ -231,8 +266,18 @@ def test_split_mode_collectors() -> None:
     assert report.collectors[1].entries == [("0/2/10", "Sensors.1F.Bedroom.Temperature")]
 
 
-def test_both_mode_collectors() -> None:
-    model, report = _build(mode="both", write_gas=frozenset())
+def test_pattern_source_skips_objects_without_a_direction() -> None:
+    data = _project_data()
+    data["communication_objects"]["co-bridge-5"] = _co("1.1.9")
+    _, report = _build(data)
+    assert ("0/3/2", "neither Write nor Transmit on the source device") in report.skipped
+    assert [c.key for c in report.collectors] == ["hg0-dpt9.001-transmit", "hg4-dpt1.001-write"]
+
+
+def test_both_direction_collectors(footprint: Callable[..., Path]) -> None:
+    ga_file = footprint("0/2/10 both", "4/2/60 both", "0/3/2 both")
+    spec = parse_device_spec(f"@{ga_file}=Basalte Core S4", 101)
+    model, report = build_device_model(_template(), spec, _project_data())
     objects = model["Application"]["ComObjects"]
     assert [o["Name"] for o in objects] == [
         "hg0-dpt9.xxx-both",
@@ -245,6 +290,52 @@ def test_both_mode_collectors() -> None:
     # No direction suffix when there is only one direction.
     assert objects[0]["Text"][0]["Text"] == "Zentral · 9.xxx"
     assert report.write == report.transmit == report.links == 3
+
+
+@pytest.mark.parametrize(
+    ("direction", "flags"),
+    [
+        ("transmit", (False, True, True)),
+        ("write", (True, False, False)),
+        ("both", (True, True, False)),
+    ],
+)
+def test_footprint_direction_drives_the_collector(
+    footprint: Callable[..., Path], direction: str, flags: tuple[bool, bool, bool]
+) -> None:
+    """The same address lands on the sending, the receiving or the
+    two-way collector purely by the direction on its line — the flags
+    of whatever ETS device carries it today play no part."""
+    spec = parse_device_spec(f"@{footprint(f'0/2/10 {direction}')}=Telenot", 103)
+    model, report = build_device_model(_template(), spec, _project_data())
+    (obj,) = model["Application"]["ComObjects"]
+    assert obj["Name"] == f"hg0-dpt9.001-{direction}"
+    assert (obj["FlagWrite"], obj["FlagTrans"], obj["FlagRead"]) == flags
+    assert report.collectors[0].entries == [("0/2/10", "Sensors.1F.Bedroom.Temperature")]
+
+
+def test_mixed_directions_order_sending_two_way_receiving(footprint: Callable[..., Path]) -> None:
+    # Three directions on one main group and type: the positional
+    # numbering must be total, not left to the address order.
+    ga_file = footprint("0/2/10 write", "0/3/2 both", "0/1/40 transmit")
+    data = _project_data()
+    data["group_addresses"]["0/1/40"]["dpt"] = {"main": 9, "sub": 1}
+    data["group_addresses"]["0/3/2"]["dpt"] = {"main": 9, "sub": 1}
+    spec = parse_device_spec(f"@{ga_file}=Telenot", 103)
+    _, report = build_device_model(_template(), spec, data)
+    assert [(c.number, c.key) for c in report.collectors] == [
+        (1, "hg0-dpt9.001-transmit"),
+        (2, "hg0-dpt9.001-both"),
+        (3, "hg0-dpt9.001-write"),
+    ]
+    assert report.write == 2 and report.transmit == 2
+
+
+def test_footprint_without_direction_names_file_and_line(footprint: Callable[..., Path]) -> None:
+    ga_file = footprint("0/2/10 transmit", "4/2/60")
+    spec = parse_device_spec(f"@{ga_file}=KNX-NATS-Bridge", 100)
+    with pytest.raises(SystemExit, match=rf"{ga_file}:2:"):
+        build_device_model(_template(), spec, _project_data())
 
 
 def test_refs_and_dynamics_group_by_main_group() -> None:
@@ -283,10 +374,8 @@ def test_catalog_keeps_numbered_sections_only() -> None:
 
 
 def test_catalog_section_rename() -> None:
-    spec = parse_device_spec("bridge placeholder=KNX-NATS-Bridge:split", 100)
-    model, _ = build_device_model(
-        _template(), spec, _project_data(), frozenset({"4/2/60"}), catalog_section="Steinroth"
-    )
+    spec = parse_device_spec("bridge placeholder=KNX-NATS-Bridge", 100)
+    model, _ = build_device_model(_template(), spec, _project_data(), catalog_section="Steinroth")
     section = model["Catalog"][0]["Items"][0]
     assert section["Name"] == section["Number"] == "Steinroth"
     assert section["Text"][0]["Text"] == "Steinroth"
@@ -301,8 +390,8 @@ def test_app_version_bumps_above_imported() -> None:
         "order_number": "KNX-NATS-BRIDGE",
         "application": "M-00FA_A-AF66-11-0000",
     }
-    spec = parse_device_spec("bridge placeholder=KNX-NATS-Bridge:split", 100)
-    model, report = build_device_model(_template(), spec, data, frozenset({"4/2/60"}))
+    spec = parse_device_spec("bridge placeholder=KNX-NATS-Bridge", 100)
+    model, report = build_device_model(_template(), spec, data)
     assert model["Application"]["Number"] == 0x12
     assert report.app_version == 0x12
     assert model["Application"]["NameText"] == "V 1.2 KNX-NATS-Bridge"
@@ -318,41 +407,36 @@ def test_first_version_replaces_nothing() -> None:
     assert model["Application"]["ReplacesVersions"] == ""
 
 
-def test_unmatched_write_gas_is_reported() -> None:
-    _, report = _build(write_gas=frozenset({"4/2/60", "7/7/7"}))
-    assert report.unmatched_write_gas == ["7/7/7"]
-
-
 def test_unknown_pattern_lists_devices() -> None:
-    spec = parse_device_spec("nonexistent=Ghost:both", 100)
+    spec = parse_device_spec("nonexistent=Ghost", 100)
     with pytest.raises(SystemExit, match="Switch Actuator"):
-        build_device_model(_template(), spec, _project_data(), frozenset())
+        build_device_model(_template(), spec, _project_data())
 
 
-def test_file_source_builds_from_listed_addresses(tmp_path: Any) -> None:
-    ga_file = tmp_path / "bridge-gas.txt"
-    ga_file.write_text("knx.0.1.40\n4/2/60\n9/9/9\n", encoding="utf-8")
-    spec = parse_device_spec(f"@{ga_file}=KNX-NATS-Bridge:split", 100)
-    model, report = build_device_model(_template(), spec, _project_data(), frozenset({"4/2/60"}))
+def test_file_source_builds_from_listed_addresses(footprint: Callable[..., Path]) -> None:
+    # Mixed spellings: a NATS subject and plain addresses on one footprint.
+    ga_file = footprint("knx.0.1.40 transmit", "4/2/60 write", "9/9/9 transmit")
+    spec = parse_device_spec(f"@{ga_file}=KNX-NATS-Bridge", 100)
+    model, report = build_device_model(_template(), spec, _project_data())
 
     objects = model["Application"]["ComObjects"]
-    # Listed addresses only — regardless of which ETS device carries them.
+    # Listed addresses only — regardless of which ETS device carries them
+    # and of that device's flags (0/1/40 sits on a Write+Transmit object).
     assert [o["Name"] for o in objects] == ["hg0-dpt1.001-transmit", "hg4-dpt1.001-write"]
     # An address the configuration lists but ETS does not know is the
     # wiring error class this modelling exists to expose.
     assert report.missing == ["9/9/9"]
 
 
-def test_file_source_rejects_empty_list(tmp_path: Any) -> None:
-    ga_file = tmp_path / "empty.txt"
-    ga_file.write_text("# nothing\n", encoding="utf-8")
-    spec = parse_device_spec(f"@{ga_file}=Ghost:both", 100)
+def test_file_source_rejects_empty_list(footprint: Callable[..., Path]) -> None:
+    ga_file = footprint("# nothing")
+    spec = parse_device_spec(f"@{ga_file}=Ghost", 100)
     with pytest.raises(SystemExit, match="lists no group addresses"):
-        build_device_model(_template(), spec, _project_data(), frozenset())
+        build_device_model(_template(), spec, _project_data())
 
 
 def test_wiring_worksheet_lists_addresses_per_collector() -> None:
-    spec = parse_device_spec("bridge placeholder=KNX-NATS-Bridge:split", 100)
+    spec = parse_device_spec("bridge placeholder=KNX-NATS-Bridge", 100)
     _, report = _build()
     sheet = wiring_worksheet(spec, report)
     assert "## Objekt 2: Zentral · 9.001 · sendet (1 GAs)" in sheet
@@ -383,9 +467,9 @@ def test_parse_collector_key_accepts_both_spellings() -> None:
 def _build_against(installed: dict[int, str] | None) -> Any:
     from knx_nats_bridge.tools.knxproj_to_kaenx import DeviceReport, build_collectors
 
-    spec = parse_device_spec("bridge placeholder=KNX-NATS-Bridge:split", 100)
+    spec = parse_device_spec("bridge placeholder=KNX-NATS-Bridge", 100)
     report = DeviceReport()
-    collectors = build_collectors(spec, _project_data(), frozenset({"4/2/60"}), report, installed)
+    collectors = build_collectors(spec, _project_data(), report, installed)
     return collectors, report
 
 
@@ -415,10 +499,10 @@ def test_without_an_installed_device_nothing_is_new() -> None:
 def test_wiring_worksheet_maps_old_numbers() -> None:
     from knx_nats_bridge.tools.knxproj_to_kaenx import DeviceReport, build_collectors
 
-    spec = parse_device_spec("bridge placeholder=KNX-NATS-Bridge:split", 100)
+    spec = parse_device_spec("bridge placeholder=KNX-NATS-Bridge", 100)
     report = DeviceReport()
     installed = {1: "hg4-dpt1.001-write", 2: "hg0-dpt9.001-transmit", 3: "hg2-dpt1-both"}
-    build_collectors(spec, _project_data(), frozenset({"4/2/60"}), report, installed)
+    build_collectors(spec, _project_data(), report, installed)
     sheet = wiring_worksheet(spec, report)
     assert "1 neu, 1 umnummeriert, 1 entfallen" in sheet
     assert "## Objekt 1: Zentral · 9.xxx · sendet (1 GAs) — NEU" in sheet
@@ -447,21 +531,20 @@ def test_version_bumps_only_on_change() -> None:
         "order_number": "KNX-NATS-BRIDGE",
         "application": "M-00FA_A-AF66-11-0000",
     }
-    spec = parse_device_spec("bridge placeholder=KNX-NATS-Bridge:split", 100)
-    write_gas = frozenset({"4/2/60"})
+    spec = parse_device_spec("bridge placeholder=KNX-NATS-Bridge", 100)
     # Installed at V 1.1 with exactly the objects the configuration
     # produces: nothing to publish, the version stays.
     installed = {1: "hg0-dpt9.xxx-transmit", 2: "hg0-dpt9.001-transmit", 3: "hg4-dpt1.001-write"}
-    model, report = build_device_model(_template(), spec, data, write_gas, installed=installed)
+    model, report = build_device_model(_template(), spec, data, installed=installed)
     assert report.app_version == 0x11 and report.new_objects == []
     # A new object: one above the installed version …
     model, report = build_device_model(
-        _template(), spec, data, write_gas, installed={1: "hg0-dpt9.xxx-transmit"}
+        _template(), spec, data, installed={1: "hg0-dpt9.xxx-transmit"}
     )
     assert report.app_version == 0x12
     # … unless the versions file knows a higher one was already published.
     model, report = build_device_model(
-        _template(), spec, data, write_gas, installed={1: "hg0-dpt9.xxx-transmit"}, published=0x13
+        _template(), spec, data, installed={1: "hg0-dpt9.xxx-transmit"}, published=0x13
     )
     assert report.app_version == 0x14
     assert model["Application"]["ReplacesVersions"] == "16 17 18 19"

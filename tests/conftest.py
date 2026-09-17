@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from pathlib import Path
 
 import pytest
 from opentelemetry import trace
@@ -22,3 +23,15 @@ def spans() -> Iterator[InMemorySpanExporter]:
     _exporter.clear()
     yield _exporter
     _exporter.clear()
+
+
+@pytest.fixture
+def footprint(tmp_path: Path) -> Callable[..., Path]:
+    """Write a footprint file from ``<address> <direction>`` lines; returns its path."""
+
+    def write(*lines: str) -> Path:
+        path = tmp_path / "footprint.txt"
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return path
+
+    return write
