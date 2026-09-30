@@ -290,15 +290,31 @@ def _build_space_id_to_name(spaces: Mapping[str, Any]) -> dict[str, str]:
 
 
 # ETS' Building tree numbers its spaces for ordering and appends the space
-# id: `3 - Büro (E3)`. Higher levels carry no id: `1 - Gebäude`. Both are
-# presentation; the name in between is the room.
-_SPACE_NUMBERING_RE = re.compile(r"^\s*\d+\s*-\s*(.+?)\s*(?:\([^)]*\))?\s*$")
+# id: `3 - Büro (E3)`. The leading number orders the tree and changes when
+# spaces are resorted, so it is presentation and goes. The id in brackets
+# stays: it is what makes a room name unique, and a room name alone is not.
+# `Flur` exists on three floors and `Garten` twice, as a building part and
+# as a room inside it. Higher levels carry no id (`1 - Gebäude`), which is
+# how a building part reads apart from a room.
+_SPACE_NUMBERING_RE = re.compile(r"^\s*\d+\s*-\s*(.+?)\s*$")
 
 
 def _strip_space_numbering(space: str) -> str:
-    """`3 - Büro (E3)` and `1 - Gebäude` -> `Büro` / `Gebäude`. Anything that
-    does not carry the numbering is returned trimmed but untouched."""
+    """`3 - Büro (E3)` and `1 - Gebäude` -> `Büro (E3)` / `Gebäude`. Anything
+    that does not carry the numbering is returned trimmed but untouched."""
     match = _SPACE_NUMBERING_RE.match(space)
+    return match.group(1).strip() if match else space.strip()
+
+
+# The space id ETS appends to a name: `Büro (E3)` -> `Büro`. `room` keeps it,
+# because it is what tells two rooms of the same name apart; the boilerplate
+# comparison below drops it for the same reason it never compares the number.
+_SPACE_ID_RE = re.compile(r"^(.*?)\s*\([^)]*\)\s*$")
+
+
+def _strip_space_id(space: str) -> str:
+    """`Büro (E3)` -> `Büro`; a name without an id is returned trimmed."""
+    match = _SPACE_ID_RE.match(space)
     return match.group(1).strip() if match else space.strip()
 
 
@@ -308,23 +324,27 @@ def _is_ets_boilerplate(description: str, room: str | None, function: str | None
     ETS seeds it with the space name followed by the function name, which
     repeats what `room` and `function` already carry. Two spellings occur:
     the plain one, and the Building-numbered one — and the latter keeps the
-    numbering the space had when the text was seeded, so a space that was
-    renumbered since leaves `3 - Terrasse (A3) Entertainment` beside a room
-    now called `2 - Terrasse (A2)`. The number is therefore matched
-    structurally, never compared. Case-insensitive and whitespace-tolerant.
+    numbering and the space id the space had when the text was seeded, so a
+    space that was renumbered since leaves `3 - Terrasse (A3) Entertainment`
+    beside a room now called `2 - Terrasse (A2)`. Number and id are therefore
+    matched structurally, never compared: the room is tried both as it is
+    stored and without its id. Case-insensitive and whitespace-tolerant.
     """
     text = " ".join(description.split())
-    parts = [part.strip() for part in (room, function) if part]
-    if text.lower() == " ".join(parts).lower():
-        return True
-    if not (room and function):
-        return False
-    numbered = re.compile(
-        r"^\d+\s*-\s*" + re.escape(room.strip()) + r"\s*(?:\([^)]*\))?\s+"
-        r"" + re.escape(function.strip()) + r"$",
-        re.IGNORECASE,
-    )
-    return numbered.match(text) is not None
+    if not function:
+        return text.lower() == (room or "").strip().lower()
+    spellings = [room.strip(), _strip_space_id(room)] if room else []
+    for spelling in dict.fromkeys(filter(None, spellings)):
+        if text.lower() == f"{spelling} {function.strip()}".lower():
+            return True
+        numbered = re.compile(
+            r"^\d+\s*-\s*" + re.escape(spelling) + r"\s*(?:\([^)]*\))?\s+"
+            r"" + re.escape(function.strip()) + r"$",
+            re.IGNORECASE,
+        )
+        if numbered.match(text):
+            return True
+    return text.lower() == function.strip().lower() if not room else False
 
 
 def _build_ga_to_function(
