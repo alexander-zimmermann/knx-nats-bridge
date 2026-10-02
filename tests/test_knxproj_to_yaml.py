@@ -345,16 +345,30 @@ def test_ignore_write_from_matches_the_device_name() -> None:
 # --- ETS artefacts: Building numbering and pre-filled descriptions ---------
 
 
-def test_strip_space_numbering_handles_both_ets_shapes() -> None:
-    # Room level carries the space id, higher levels do not.
-    assert _strip_space_numbering("3 - Büro (E3)") == "Büro"
+def test_strip_space_numbering_drops_the_order_and_keeps_the_id() -> None:
+    # The leading number orders the tree and changes when spaces are
+    # resorted; the id in brackets identifies the space and stays.
+    assert _strip_space_numbering("3 - Büro (E3)") == "Büro (E3)"
     assert _strip_space_numbering("1 - Gebäude") == "Gebäude"
-    assert _strip_space_numbering("2 - Badezimmer Eltern (O5)") == "Badezimmer Eltern"
+    assert _strip_space_numbering("2 - Badezimmer Eltern (O5)") == "Badezimmer Eltern (O5)"
+
+
+def test_strip_space_numbering_keeps_same_named_spaces_apart() -> None:
+    """The id is the whole point: three floors have a `Flur`, and `Garten`
+    is both a building part and a room inside it."""
+    assert _strip_space_numbering("1 - Flur (K1)") == "Flur (K1)"
+    assert _strip_space_numbering("1 - Flur (E1)") == "Flur (E1)"
+    assert _strip_space_numbering("1 - Flur (O1)") == "Flur (O1)"
+    # The building part carries no id, which is how it reads apart.
+    assert _strip_space_numbering("2 - Garten") == "Garten"
+    assert _strip_space_numbering("3 - Garten (G5)") == "Garten (G5)"
 
 
 def test_strip_space_numbering_leaves_plain_names_alone() -> None:
     assert _strip_space_numbering("Büro") == "Büro"
     assert _strip_space_numbering("  Gäste WC  ") == "Gäste WC"
+    # The one room whose node carries no numbering; its id must survive.
+    assert _strip_space_numbering("Speicher (S)") == "Speicher (S)"
     # A hyphen that is not the numbering separator must survive.
     assert _strip_space_numbering("Badezimmer-Eltern") == "Badezimmer-Eltern"
 
@@ -369,7 +383,7 @@ def test_extract_strips_the_numbering_from_the_room() -> None:
     }
     mapping: dict[str, Any] = {}
     _extract(mapping, data)
-    assert mapping["0/1/40"]["room"] == "Büro"
+    assert mapping["0/1/40"]["room"] == "Büro (E3)"
 
 
 def test_extract_drops_the_description_ets_pre_fills() -> None:
@@ -383,6 +397,22 @@ def test_extract_drops_the_description_ets_pre_fills() -> None:
     data["group_addresses"]["0/1/40"]["description"] = "3 - Büro (E3) Lighting Büro"
     mapping: dict[str, Any] = {}
     _extract(mapping, data)
+    assert "description" not in mapping["0/1/40"]
+
+
+def test_extract_drops_the_pre_filled_description_for_same_named_rooms() -> None:
+    """The room now carries its id, and the seeded text still has to be
+    recognised — otherwise renaming nothing would fill 217 Flur addresses
+    with a description that only repeats room and function."""
+    data = _project_data()
+    data["spaces"] = {"S2": {"name": "1 - Flur (K1)"}}
+    data["functions"] = {
+        "F1": {"name": "Sensorik", "space_id": "S2", "group_addresses": {"0/1/40": {}}}
+    }
+    data["group_addresses"]["0/1/40"]["description"] = "1 - Flur (K1) Sensorik"
+    mapping: dict[str, Any] = {}
+    _extract(mapping, data)
+    assert mapping["0/1/40"]["room"] == "Flur (K1)"
     assert "description" not in mapping["0/1/40"]
 
 
@@ -419,7 +449,8 @@ def test_extract_drops_boilerplate_whose_numbering_went_stale() -> None:
     mapping: dict[str, Any] = {}
     _extract(mapping, data)
     assert "description" not in mapping["0/1/40"]
-    assert mapping["0/1/40"]["room"] == "Terrasse"
+    # The id the room carries today, not the stale one from the description.
+    assert mapping["0/1/40"]["room"] == "Terrasse (A2)"
 
 
 def test_extract_keeps_a_description_that_only_looks_numbered() -> None:
