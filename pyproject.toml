@@ -4,7 +4,7 @@ version = "0.23.0"
 description = "Bridge KNX telegrams to NATS JetStream with DPT decoding"
 readme = "README.md"
 license = "GPL-2.0-or-later"
-requires-python = ">=3.14.7"
+requires-python = ">=3.14.8"
 authors = [
     { name = "Alexander Zimmermann" },
 ]
@@ -34,14 +34,14 @@ tools = [
 # psycopg out of plain `pip install knx-nats-bridge`. The container image
 # installs this extra so the same image serves bridge and import job.
 import = [
-    "psycopg[binary]>=3.3.5",
+    "psycopg[binary]>=3.3.6",
 ]
 dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
-    "ruff>=0.16.8",
-    "mypy>=2.3.1",
+    "ruff>=0.16.10",
+    "mypy>=2.4.0",
     "pre-commit>=4.6.2",
     "types-PyYAML",
     "types-jsonschema",
