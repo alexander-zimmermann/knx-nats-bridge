@@ -140,7 +140,7 @@ def _extract(
         # spellings have to be compared against.
         rooms = [r for r in (raw_room, entry.get("room")) if r]
         if description and not any(
-            _is_ets_boilerplate(description, room, entry.get("function")) for room in rooms
+            _is_prefilled_description(description, room, entry.get("function")) for room in rooms
         ):
             entry["description"] = description
 
@@ -318,7 +318,7 @@ def _strip_space_id(space: str) -> str:
     return match.group(1).strip() if match else space.strip()
 
 
-def _is_ets_boilerplate(description: str, room: str | None, function: str | None) -> bool:
+def _is_prefilled_description(description: str, room: str | None, function: str | None) -> bool:
     """Whether a description is the text ETS pre-fills a Function with.
 
     ETS seeds it with the space name followed by the function name, which
