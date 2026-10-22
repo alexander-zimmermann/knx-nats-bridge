@@ -8,7 +8,7 @@ Argo sync of the catalog ConfigMap). Idempotent:
 * DELETE rows whose GA is no longer in the YAML (tombstone purge)
 
 Connection from the standard ``MCP_DB_*`` env vars (host / port / name
-/ username / password) — same shape iot-mcp-bridge uses, so the same
+/ username / password) — same shape lares-mcp-bridge uses, so the same
 SealedSecret + Kyverno-clone topology applies. Username + password
 URL-encoded because random-generated passwords routinely contain `/`,
 `@`, `:`, `+` that break psycopg's URI parser.

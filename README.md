@@ -108,8 +108,8 @@ at startup.
 ```
 
 The bridge itself only uses `name` and `dpt`; the optional fields are
-consumed by downstream services (iot-mcp-bridge for SQL joins by room,
-state-projector for Redis keying by function).
+imported into TSDB's `ga_catalog` table, where lares-mcp-bridge filters by
+`room` and `function`.
 
 ### `writable`
 
