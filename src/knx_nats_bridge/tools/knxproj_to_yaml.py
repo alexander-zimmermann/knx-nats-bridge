@@ -1,8 +1,7 @@
 """Convert an ETS .knxproj export into the ga-catalog.yaml format.
 
 Extracts per group address: name, DPT, plus the ETS metadata that
-downstream consumers (iot-mcp-bridge, state-projector) need to
-resolve raw GAs to room/function/description.
+lares-mcp-bridge needs to resolve raw GAs to room/function/description.
 
 Requires the optional dependency `xknxproject` (install via
 `pip install "knx-nats-bridge[tools]"`).
