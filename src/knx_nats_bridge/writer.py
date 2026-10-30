@@ -16,7 +16,7 @@ from nats.errors import TimeoutError as NATSTimeoutError
 from nats.js import JetStreamContext
 from nats.js.api import ConsumerConfig, DeliverPolicy
 from nats.js.errors import NotFoundError
-from nats_bridge_core import tracing
+from nats_bridge_core import connect, tracing
 from opentelemetry import trace
 from opentelemetry.trace import StatusCode
 from xknx import XKNX
@@ -76,22 +76,15 @@ class Writer:
             logger.info("writer enabled but rules table is empty — idle")
             return
 
-        self._nc = NatsClient()
-        kwargs = self._settings.nats_auth_kwargs()
-        kwargs.update(
-            servers=self._settings.nats_servers_list,
-            max_reconnect_attempts=-1,
-            reconnect_time_wait=2,
-            connect_timeout=10,
-            disconnected_cb=self._on_disconnect,
-            reconnected_cb=self._on_reconnect,
-        )
-        await self._nc.connect(**kwargs)
-        self._js = self._nc.jetstream()
-        self._metrics.writer_nats_connected.set(1)
-        logger.info(
-            "writer connected to NATS: %s (%d subjects, %d rules)",
+        self._nc = await connect(
             self._settings.nats_servers_list,
+            name="knx-nats-bridge writer",
+            connected=lambda up: self._metrics.writer_nats_connected.set(int(up)),
+            **self._settings.nats_auth_kwargs(),
+        )
+        self._js = self._nc.jetstream()
+        logger.info(
+            "writer listening on %d subjects (%d rules)",
             len(self._rules.subjects()),
             len(self._rules),
         )
@@ -138,14 +131,6 @@ class Writer:
             except Exception:
                 logger.exception("error draining writer NATS client")
         self._metrics.writer_nats_connected.set(0)
-
-    async def _on_disconnect(self) -> None:
-        self._metrics.writer_nats_connected.set(0)
-        logger.warning("writer nats disconnected")
-
-    async def _on_reconnect(self) -> None:
-        self._metrics.writer_nats_connected.set(1)
-        logger.info("writer nats reconnected")
 
     async def _on_message(self, msg: Msg) -> None:
         # Joins the trace the publisher put into the NATS headers.
