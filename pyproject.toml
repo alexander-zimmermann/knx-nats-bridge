@@ -16,11 +16,11 @@ classifiers = [
     "Topic :: Home Automation",
 ]
 dependencies = [
-    "xknx>=4.0.0",
+    "xknx>=4.1.1",
     "nats-bridge-core @ git+https://github.com/alexander-zimmermann/nats-bridge-core@v0.10.0",
     "nats-py[nkeys]>=2.16.0",
     "prometheus-client>=0.26.0",
-    "pydantic>=2.14.2",
+    "pydantic>=2.14.3",
     "pydantic-settings>=2.16.2",
     "pyyaml>=6.0.3",
     "jsonschema>=4.26.0",
@@ -34,13 +34,13 @@ tools = [
 # psycopg out of plain `pip install knx-nats-bridge`. The container image
 # installs this extra so the same image serves bridge and import job.
 import = [
-    "psycopg[binary]>=3.3.6",
+    "psycopg[binary]>=3.3.8",
 ]
 dev = [
     "pytest>=9.2.0",
-    "pytest-asyncio>=1.4.1",
+    "pytest-asyncio>=1.4.1.post1",
     "pytest-cov>=7.1.0",
-    "ruff>=0.17.3",
+    "ruff>=0.17.4",
     "mypy>=2.4.1",
     "pre-commit>=4.7.0",
     "types-PyYAML",
