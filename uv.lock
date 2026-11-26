@@ -422,7 +422,7 @@ requires-dist = [
     { name = "types-jsonschema", marker = "extra == 'dev'" },
     { name = "types-pyyaml", marker = "extra == 'dev'" },
     { name = "xknx", specifier = ">=4.1.1" },
-    { name = "xknxproject", marker = "extra == 'tools'", specifier = ">=3.11.1" },
+    { name = "xknxproject", marker = "extra == 'tools'", specifier = ">=3.12.0" },
 ]
 provides-extras = ["tools", "import", "dev"]
 
@@ -1197,13 +1197,13 @@ wheels = [
 
 [[package]]
 name = "xknxproject"
-version = "3.11.1"
+version = "3.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyzipper" },
     { name = "striprtf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/70/3f/632eb772f6daaf809297847c514ab16b12273958d8f08352974923e33825/xknxproject-3.11.1.tar.gz", hash = "sha256:545631133fbbae284b83098e3ee47ee0bddb7e8c36783b7b3daa034acbc7abfd", size = 72153, upload-time = "2026-11-24T08:53:52.759Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b2/70/4e6331fd87ff5271a87d105ac08f885befb6bfc983edd9980eb65145c4db/xknxproject-3.12.0.tar.gz", hash = "sha256:f39ae35c44eb476f6b0241815ad76a59fb89d10729db09da56271b41e89607f5", size = 76934, upload-time = "2026-11-26T21:40:05.333Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b1/fa/0ae9d9402698efc228c938234eaef0eb1faf7b297e2902e17e9b5939409c/xknxproject-3.11.1-py3-none-any.whl", hash = "sha256:148416273cad8c52d57452bc3f9da921753b2933f34875ac2690f9886cd6d9f2", size = 61370, upload-time = "2026-11-24T08:53:51.386Z" },
+    { url = "https://files.pythonhosted.org/packages/50/dc/8ef707e5e5e861ee2fe031f978e2c7612be0acb32251080dbfc1cd4e0043/xknxproject-3.12.0-py3-none-any.whl", hash = "sha256:7b638ff5b2329d0fe225f371650eb9c1c8df272965859009207bc93b66832c54", size = 63908, upload-time = "2026-11-26T21:40:03.938Z" },
 ]

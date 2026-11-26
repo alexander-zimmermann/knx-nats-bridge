@@ -28,7 +28,7 @@ dependencies = [
 
 [project.optional-dependencies]
 tools = [
-    "xknxproject>=3.11.1",
+    "xknxproject>=3.12.0",
 ]
 # Only the import-catalog CLI (Kubernetes Job) talks to TimescaleDB; keep
 # psycopg out of plain `pip install knx-nats-bridge`. The container image
