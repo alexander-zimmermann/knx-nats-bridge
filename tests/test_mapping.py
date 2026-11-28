@@ -79,6 +79,22 @@ def test_loads_writable_flag(tmp_path: Path) -> None:
     assert mapping.get("1/2/5").writable is False  # type: ignore[union-attr]
 
 
+def test_accepts_space_path(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        '"3/2/62": { name: "Spots", dpt: "1.001", room: "Büro (E3)",'
+        ' space_path: ["Anwesen", "Gebäude", "Erdgeschoss (EG)", "Büro (E3)"] }\n',
+    )
+    assert "3/2/62" in GroupAddressMapping.load(path)
+
+
+@pytest.mark.parametrize("space_path", ['"Büro (E3)"', "[]", '["Gebäude", ""]'])
+def test_rejects_a_malformed_space_path(tmp_path: Path, space_path: str) -> None:
+    path = _write(tmp_path, f'"3/2/62": {{ name: "x", dpt: "1.001", space_path: {space_path} }}\n')
+    with pytest.raises(jsonschema.ValidationError):
+        GroupAddressMapping.load(path)
+
+
 def test_rejects_unknown_field(tmp_path: Path) -> None:
     path = _write(
         tmp_path,

@@ -30,12 +30,14 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
+# `space_path` is TEXT[]; psycopg sends a Python list as an array.
 _UPSERT_SQL = """
-INSERT INTO ga_catalog (ga, name, room, function, description, dpt, updated_at)
-VALUES (%s, %s, %s, %s, %s, %s, now())
+INSERT INTO ga_catalog (ga, name, room, space_path, function, description, dpt, updated_at)
+VALUES (%s, %s, %s, %s, %s, %s, %s, now())
 ON CONFLICT (ga) DO UPDATE SET
     name        = EXCLUDED.name,
     room        = EXCLUDED.room,
+    space_path  = EXCLUDED.space_path,
     function    = EXCLUDED.function,
     description = EXCLUDED.description,
     dpt         = EXCLUDED.dpt,
@@ -43,6 +45,7 @@ ON CONFLICT (ga) DO UPDATE SET
 WHERE
     ga_catalog.name        IS DISTINCT FROM EXCLUDED.name OR
     ga_catalog.room        IS DISTINCT FROM EXCLUDED.room OR
+    ga_catalog.space_path  IS DISTINCT FROM EXCLUDED.space_path OR
     ga_catalog.function    IS DISTINCT FROM EXCLUDED.function OR
     ga_catalog.description IS DISTINCT FROM EXCLUDED.description OR
     ga_catalog.dpt         IS DISTINCT FROM EXCLUDED.dpt
@@ -73,6 +76,7 @@ def _to_rows(catalog: dict[str, Any]) -> list[tuple[Any, ...]]:
                 ga,
                 name,
                 e.get("room"),
+                e.get("space_path"),
                 e.get("function"),
                 e.get("description"),
                 dpt,
