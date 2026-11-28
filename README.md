@@ -80,19 +80,19 @@ Auth precedence: `NATS_CREDS_FILE` > `NATS_NKEY_SEED_FILE` > `NATS_USER` + `NATS
 ## GA catalog format
 
 YAML file keyed by group address (`<main>/<middle>/<sub>`). Each entry has
-two required fields (`name`, `dpt`), a `writable` flag, and three optional
-fields extracted from ETS (`room`, `function`, `description`). Validated
-against
+two required fields (`name`, `dpt`), a `writable` flag, and four optional
+fields extracted from ETS (`room`, `space_path`, `function`, `description`).
+Validated against
 [src/knx_nats_bridge/\_schemas/ga-catalog.schema.json](src/knx_nats_bridge/_schemas/ga-catalog.schema.json)
 at startup.
 
 ```yaml
-# examples/ga-catalog.example.yaml
 "1/2/3":
   name: "Beleuchtung.OG.Schlafzimmer.Decke.Schalten"
   dpt: "1.001"
   writable: true
   room: "Schlafzimmer"
+  space_path: ["Haus", "Obergeschoss", "Schlafzimmer"]
   function: "Beleuchtung"
   description: "Deckenleuchte schalten"
 "2/1/5":
@@ -100,6 +100,7 @@ at startup.
   dpt: "9.001"
   writable: false
   room: "Schlafzimmer"
+  space_path: ["Haus", "Obergeschoss", "Schlafzimmer"]
   function: "Sensorik"
 "3/2/7":
   name: "Versorgungstechnik.KG.Heizung.Energiezähler"
@@ -110,6 +111,15 @@ at startup.
 The bridge itself only uses `name` and `dpt`; the optional fields are
 imported into TSDB's `ga_catalog` table, where lares-mcp-bridge filters by
 `room` and `function`.
+
+### `space_path`
+
+The ETS Building tree from the top down to the space of the group address's
+Function, each name stripped of ETS' numbering like `room`. The last element
+is `room`. It answers what the room name alone cannot: which floor or
+building part a room lies in, so a consumer can collect every address
+beneath a floor with a prefix match. Two `Flur` rooms on different floors
+stay apart because the space id in brackets is kept.
 
 ### `writable`
 
@@ -141,9 +151,9 @@ not writable.
 
 Use `knxproj-to-yaml` (requires the `[tools]` extra: `pip install
 "knx-nats-bridge[tools]"`) to generate the catalog from an ETS `.knxproj`
-export. It walks the ETS Building hierarchy for `room`, the ETS Functions
-table for `function`, and uses the GA's `description`/`comment` field
-verbatim:
+export. It walks the ETS Building hierarchy for `room` and `space_path`,
+the ETS Functions table for `function`, and uses the GA's
+`description`/`comment` field verbatim:
 
 ```sh
 knxproj-to-yaml --input project.knxproj --output ga-catalog.yaml \

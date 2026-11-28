@@ -19,6 +19,7 @@ import os
 import re
 import sys
 from collections.abc import Container, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +87,11 @@ def _extract(
       * ``function``     — ETS Function name, if the GA is referenced by one
       * ``room``         — Function's space name, if the Function has a
                             space_id, stripped of ETS' Building numbering
+      * ``space_path``   — the spaces from the top of the Building tree down
+                            to the Function's space, each stripped like
+                            ``room``; the last element is ``room``. It tells
+                            a consumer which floor or building part a room
+                            lies in, which the room name alone does not
       * ``description``  — ETS description / comment, unless it is the
                             boilerplate ETS pre-fills
       * ``writable``     — True when a linked communication object carries the
@@ -105,8 +111,7 @@ def _extract(
     devices = project_data.get("devices", {}) or {}
     ignored = _ignored_co_ids(comm_objects, devices, ignore_write_from)
 
-    space_id_to_name = _build_space_id_to_name(spaces)
-    ga_to_function = _build_ga_to_function(functions, space_id_to_name)
+    ga_to_function = _build_ga_to_function(functions, _build_space_paths(spaces))
 
     for ga_str, ga_info in group_addresses.items():
         if not isinstance(ga_info, dict):
@@ -128,11 +133,13 @@ def _extract(
         }
 
         fn = ga_to_function.get(str(ga_str))
-        raw_room = fn.get("room") if fn else None
+        raw_room = fn.space_path[-1] if fn and fn.space_path else None
         if fn:
-            entry["function"] = fn["name"]
-            if raw_room:
-                entry["room"] = _strip_space_numbering(raw_room)
+            entry["function"] = fn.name
+            if fn.space_path:
+                space_path = [_strip_space_numbering(s) for s in fn.space_path]
+                entry["room"] = space_path[-1]
+                entry["space_path"] = space_path
 
         description = (ga_info.get("description") or ga_info.get("comment") or "").strip()
         # ETS writes the boilerplate with the *raw* space name, so both
@@ -261,31 +268,34 @@ def _extract_dpt(dpt: Any) -> str | None:
     return None
 
 
-def _build_space_id_to_name(spaces: Mapping[str, Any]) -> dict[str, str]:
-    """Walk the Space tree and return {space_id -> space name}."""
-    space_id_to_name: dict[str, str] = {}
+def _build_space_paths(spaces: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
+    """Walk the Space tree and return {space_id -> the space names from the
+    top of the tree down to that space}, raw as ETS writes them. A space
+    without a name is not indexed and adds nothing to its children's paths."""
+    space_paths: dict[str, tuple[str, ...]] = {}
 
-    def _walk(space_dict: Mapping[str, Any]) -> None:
+    def _walk(space_dict: Mapping[str, Any], parent: tuple[str, ...]) -> None:
         if not isinstance(space_dict, dict):
             return
         for space_id, space in space_dict.items():
             if not isinstance(space, dict):
                 continue
             name = (space.get("name") or "").strip()
+            path = (*parent, name) if name else parent
             if name:
-                space_id_to_name[str(space_id)] = name
+                space_paths[str(space_id)] = path
                 # Also index by the Space's own `identifier` field — some
                 # xknxproject builds key Functions by identifier, not by the
                 # outer dict key.
                 ident = space.get("identifier")
                 if ident:
-                    space_id_to_name[str(ident)] = name
+                    space_paths[str(ident)] = path
             children = space.get("spaces") or {}
             if children:
-                _walk(children)
+                _walk(children, path)
 
-    _walk(spaces)
-    return space_id_to_name
+    _walk(spaces, ())
+    return space_paths
 
 
 # ETS' Building tree numbers its spaces for ordering and appends the space
@@ -346,17 +356,27 @@ def _is_prefilled_description(description: str, room: str | None, function: str 
     return text.lower() == function.strip().lower() if not room else False
 
 
+@dataclass(frozen=True, slots=True)
+class _Function:
+    """The ETS Function a GA belongs to: its name, and the path down to the
+    space it sits in (empty when the Function has no space_id, or one that
+    is not in the Building tree)."""
+
+    name: str
+    space_path: tuple[str, ...]
+
+
 def _build_ga_to_function(
     functions: Mapping[str, Any],
-    space_id_to_name: Mapping[str, str],
-) -> dict[str, dict[str, str | None]]:
-    """Invert the Function dict so we can look up name+room per GA.
+    space_paths: Mapping[str, tuple[str, ...]],
+) -> dict[str, _Function]:
+    """Invert the Function dict so we can look up the Function per GA.
 
-    The returned value carries both the function name and the resolved
-    *logical* room from the function's `space_id` — which is the room the
-    function controls, not the room where the actuator hardware lives.
+    The space is resolved from the function's `space_id` — the *logical*
+    room the function controls, not the room where the actuator hardware
+    lives.
     """
-    ga_to_function: dict[str, dict[str, str | None]] = {}
+    ga_to_function: dict[str, _Function] = {}
     for fn in functions.values():
         if not isinstance(fn, dict):
             continue
@@ -364,10 +384,10 @@ def _build_ga_to_function(
         if not fn_name:
             continue
         space_id = fn.get("space_id")
-        room = space_id_to_name.get(str(space_id)) if space_id else None
+        ref = _Function(fn_name, space_paths.get(str(space_id), ()) if space_id else ())
         ga_dict = fn.get("group_addresses") or {}
         for ga in ga_dict:
-            ga_to_function.setdefault(str(ga), {"name": fn_name, "room": room})
+            ga_to_function.setdefault(str(ga), ref)
     return ga_to_function
 
 

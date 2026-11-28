@@ -6,8 +6,9 @@ from typing import Any
 
 from knx_nats_bridge.tools.knxproj_to_yaml import (
     _build_ga_to_function,
-    _build_space_id_to_name,
+    _build_space_paths,
     _extract,
+    _Function,
     _has_write_flag,
     _is_writable,
     _strip_space_numbering,
@@ -153,6 +154,8 @@ def test_extract_room_from_function_space_id() -> None:
         "dpt": "1.001",
         "writable": True,
         "room": "Bedroom",
+        # The spaces above the room, top down; the room itself is the last.
+        "space_path": ["TestHouse", "1F", "Bedroom"],
         "function": "Lighting Bedroom",
         "description": "Switch ceiling light",
     }
@@ -165,6 +168,7 @@ def test_extract_room_from_function_space_id() -> None:
         # A placeholder device receives it, so the naive rule says writable.
         "writable": True,
         "room": "Bedroom",
+        "space_path": ["TestHouse", "1F", "Bedroom"],
         "function": "Climate Bedroom",
         "description": "Bedroom temperature sensor",
     }
@@ -250,7 +254,7 @@ def test_writable_provenance_names_the_supplying_device() -> None:
     ]
 
 
-def test_build_space_id_to_name_indexes_by_key_and_identifier() -> None:
+def test_build_space_paths_indexes_by_key_and_identifier() -> None:
     spaces = {
         "outer-key": {
             "name": "Building",
@@ -264,11 +268,23 @@ def test_build_space_id_to_name_indexes_by_key_and_identifier() -> None:
             },
         }
     }
-    result = _build_space_id_to_name(spaces)
-    assert result["outer-key"] == "Building"
-    assert result["ident-building"] == "Building"
-    assert result["inner-key"] == "Room"
-    assert result["ident-room"] == "Room"
+    result = _build_space_paths(spaces)
+    assert result["outer-key"] == ("Building",)
+    assert result["ident-building"] == ("Building",)
+    assert result["inner-key"] == ("Building", "Room")
+    assert result["ident-room"] == ("Building", "Room")
+
+
+def test_build_space_paths_skips_a_nameless_space() -> None:
+    spaces = {
+        "S1": {
+            "name": "Building",
+            "spaces": {"S2": {"name": "", "spaces": {"S3": {"name": "Room"}}}},
+        }
+    }
+    result = _build_space_paths(spaces)
+    assert "S2" not in result
+    assert result["S3"] == ("Building", "Room")
 
 
 def test_build_ga_to_function_resolves_room_via_space_id() -> None:
@@ -279,9 +295,9 @@ def test_build_ga_to_function_resolves_room_via_space_id() -> None:
             "group_addresses": {"1/2/3": {}},
         },
     }
-    space_id_to_name = {"room-1": "Bedroom"}
-    result = _build_ga_to_function(functions, space_id_to_name)
-    assert result["1/2/3"] == {"name": "First", "room": "Bedroom"}
+    space_paths = {"room-1": ("House", "Bedroom")}
+    result = _build_ga_to_function(functions, space_paths)
+    assert result["1/2/3"] == _Function("First", ("House", "Bedroom"))
 
 
 def test_build_ga_to_function_first_wins_when_duplicated() -> None:
@@ -289,9 +305,9 @@ def test_build_ga_to_function_first_wins_when_duplicated() -> None:
         "fn-a": {"name": "First", "space_id": "r1", "group_addresses": {"1/2/3": {}}},
         "fn-b": {"name": "Second", "space_id": "r2", "group_addresses": {"1/2/3": {}}},
     }
-    space_id_to_name = {"r1": "RoomA", "r2": "RoomB"}
-    result = _build_ga_to_function(functions, space_id_to_name)
-    assert result["1/2/3"] == {"name": "First", "room": "RoomA"}
+    space_paths = {"r1": ("RoomA",), "r2": ("RoomB",)}
+    result = _build_ga_to_function(functions, space_paths)
+    assert result["1/2/3"] == _Function("First", ("RoomA",))
 
 
 def test_build_ga_to_function_handles_missing_space_id() -> None:
@@ -299,7 +315,7 @@ def test_build_ga_to_function_handles_missing_space_id() -> None:
         "fn-a": {"name": "Standalone", "group_addresses": {"1/2/3": {}}},
     }
     result = _build_ga_to_function(functions, {})
-    assert result["1/2/3"] == {"name": "Standalone", "room": None}
+    assert result["1/2/3"] == _Function("Standalone", ())
 
 
 def test_ignore_write_from_excludes_placeholder_devices() -> None:
@@ -384,6 +400,7 @@ def test_extract_strips_the_numbering_from_the_room() -> None:
     mapping: dict[str, Any] = {}
     _extract(mapping, data)
     assert mapping["0/1/40"]["room"] == "Büro (E3)"
+    assert mapping["0/1/40"]["space_path"] == ["Erdgeschoss (EG)", "Büro (E3)"]
 
 
 def test_extract_drops_the_description_ets_pre_fills() -> None:
